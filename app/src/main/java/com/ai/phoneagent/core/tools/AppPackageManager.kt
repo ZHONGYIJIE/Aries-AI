@@ -213,6 +213,12 @@ object AppPackageManager {
                             "powerpoint" to "com.microsoft.office.powerpoint",
                             "支付宝" to "com.eg.android.AlipayGphone",
                             "alipay" to "com.eg.android.AlipayGphone",
+                            
+                            // ===== 医疗健康 =====
+                            "医院挂号通" to "com.guahao001.proj.yygh_app",
+                            "guahao" to "com.guahao001.proj.yygh_app",
+                            "医院挂号网" to "dtys.guahaowang",
+                            "guahaowang" to "dtys.guahaowang",
                             "银行" to "com.icbc",
                             "icbc" to "com.icbc",
                             

@@ -168,9 +168,9 @@ class CoreModuleTest {
     
     @Test
     fun `PromptTemplates 构建系统提示词`() {
-        val prompt = PromptTemplates.buildSystemPrompt(1080, 1920)
+        val prompt = PromptTemplates.buildSystemPrompt(1080, 1920, null)
         
-        assertTrue(prompt.contains("Aries AI"))
+        assertTrue(prompt.contains("手机 UI 自动化助手"))
         assertTrue(prompt.contains("1080"))
         assertTrue(prompt.contains("1920"))
         assertTrue(prompt.contains("Launch"))

@@ -68,7 +68,9 @@ object AppPackageMapping {
                     "崩坏：星穹铁道" to "com.miHoYo.hkrpg",
                     "恋与深空" to "com.papegames.lysk.cn",
                     "支付宝" to "com.eg.android.AlipayGphone",
-                    // ===== Android系统设置 =====
+                            "医院挂号通" to "com.guahao001.proj.yygh_app",
+                            "医院挂号网" to "dtys.guahaowang",
+                            // ===== Android系统设置 =====
                     "AndroidSystemSettings" to "com.android.settings",
                     "Android System Settings" to "com.android.settings",
                     "Android  System Settings" to "com.android.settings",

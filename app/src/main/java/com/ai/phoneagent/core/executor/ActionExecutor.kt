@@ -19,6 +19,7 @@ package com.ai.phoneagent.core.executor
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
+import com.ai.phoneagent.AutomationOverlay
 import com.ai.phoneagent.LaunchProxyActivity
 import com.ai.phoneagent.PhoneAgentAccessibilityService
 import com.ai.phoneagent.core.agent.ParsedAgentAction
@@ -53,15 +54,27 @@ class ActionExecutor(
         val nameKey = name.replace(" ", "")
 
         return when (nameKey) {
+            // 启动应用
             "launch", "open_app", "start_app" -> executeLaunch(action, service, onLog)
+            // 返回/导航
             "back" -> executeBack(service, onLog)
             "home" -> executeHome(service, onLog)
+            // 等待
             "wait", "sleep" -> executeWait(action, onLog)
-            "type", "input", "text" -> executeType(action, service, uiDump, screenW, screenH, onLog)
+            // 输入
+            "type", "input", "text", "type_name" -> executeType(action, service, uiDump, screenW, screenH, onLog)
+            // 点击
             "tap", "click", "press" -> executeTap(action, service, uiDump, screenW, screenH, onLog)
-            "longpress", "long_press" -> executeLongPress(action, service, screenW, screenH, onLog)
-            "doubletap", "double_tap" -> executeDoubleTap(action, service, screenW, screenH, onLog)
+            // 长按
+            "longpress", "long_press", "long press" -> executeLongPress(action, service, screenW, screenH, onLog)
+            // 双击
+            "doubletap", "double_tap", "double tap" -> executeDoubleTap(action, service, screenW, screenH, onLog)
+            // 滑动
             "swipe", "scroll" -> executeSwipe(action, service, screenW, screenH, onLog)
+            // 用户接管
+            "take_over", "takeover" -> executeTakeOver(action, onLog)
+            // 结束任务（不执行，只返回）
+            "finish" -> true
             else -> false
         }
     }
@@ -109,18 +122,41 @@ class ActionExecutor(
                 .setClassName(ai.packageName, ai.name)
         }
 
-        // 构建候选包名列表
+        // 初始化 AppPackageManager 缓存（确保能查询已安装应用）
+        com.ai.phoneagent.core.tools.AppPackageManager.initializeCache(service)
+
+        // 构建候选包名列表 - 优先级：精确匹配 > 预定义映射 > 已安装应用列表 > 模糊匹配
         val candidates = buildList {
-            if (t.contains('.')) add(t)
+            // 1. 如果输入看起来像包名（包含多个点），优先尝试
+            if (t.contains('.') && t.count { it == '.' } >= 1) {
+                add(t)
+            }
+            // 2. 预定义映射（AppPackageMapping - 常用应用）
             com.ai.phoneagent.AppPackageMapping.resolve(t)?.let { add(it) }
+            // 3. 已安装应用列表精确匹配
             com.ai.phoneagent.core.tools.AppPackageManager.resolvePackageByLabel(service, t)?.let { add(it) }
-            if (!t.contains('.')) add(t)
+            // 4. 如果输入不包含点，直接作为应用名尝试
+            if (!t.contains('.')) {
+                add(t)
+            }
         }.distinct()
 
-        var pkgName = candidates.firstOrNull().orEmpty().ifBlank { t }
+        // 如果候选列表为空，尝试从已安装应用列表中模糊搜索
+        val finalCandidates = if (candidates.isEmpty()) {
+            // 兜底：从已安装应用中模糊搜索应用名包含关键字的
+            val allApps = com.ai.phoneagent.core.tools.AppPackageManager.getAllInstalledApps()
+            allApps.filter { (_, appName) ->
+                appName.contains(t, ignoreCase = true) ||
+                t.contains(appName, ignoreCase = true)
+            }.map { it.first }.take(5) // 最多取5个候选
+        } else {
+            candidates
+        }
+
+        var pkgName = finalCandidates.firstOrNull().orEmpty().ifBlank { t }
         var intent: android.content.Intent? = null
 
-        for (candidate in candidates) {
+        for (candidate in finalCandidates) {
             if (candidate.contains('.') && !isInstalled(candidate)) continue
             val i = buildLaunchIntent(candidate)
             if (i != null) {
@@ -172,6 +208,19 @@ class ActionExecutor(
         service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
         service.awaitWindowEvent(beforeTime, timeoutMs = config.homeAwaitWindowTimeoutMs)
         return true
+    }
+
+    /**
+     * 执行 Take_over - 需要用户接管
+     * 实际上不执行任何动作，只返回失败，由上层处理
+     */
+    private fun executeTakeOver(
+        action: ParsedAgentAction,
+        onLog: (String) -> Unit
+    ): Boolean {
+        val message = action.fields["message"].orEmpty().ifBlank { "需要用户协助处理" }
+        onLog("Take_over: $message")
+        return false
     }
 
     private suspend fun executeWait(
@@ -279,13 +328,17 @@ class ActionExecutor(
         // 优先使用 selector
         val selectorOk = if (resourceId != null || contentDesc != null || className != null || elementText != null) {
             onLog("执行：Tap(selector)")
-            service.clickElement(
+            // 临时隐藏悬浮窗，防止点击到悬浮窗
+            AutomationOverlay.temporaryHide()
+            val result = service.clickElement(
                 resourceId = resourceId,
                 text = elementText,
                 contentDesc = contentDesc,
                 className = className,
                 index = index
             )
+            AutomationOverlay.restoreVisibility()
+            result
         } else {
             false
         }
@@ -304,7 +357,10 @@ class ActionExecutor(
 
         val (x, y) = ActionUtils.parsePointToScreen(xRel to yRel, screenW, screenH)
         onLog("执行：Tap($xRel,$yRel)")
+        // 临时隐藏悬浮窗，防止点击到悬浮窗
+        AutomationOverlay.temporaryHide()
         service.clickAwait(x, y)
+        AutomationOverlay.restoreVisibility()
         service.awaitWindowEvent(service.lastWindowEventTime(), timeoutMs = config.tapAwaitWindowTimeoutMs)
         return true
     }
@@ -320,7 +376,10 @@ class ActionExecutor(
         val (x, y) = ActionUtils.parsePointToScreen(element, screenW, screenH)
 
         onLog("执行：Long Press(${element.first},${element.second})")
+        // 临时隐藏悬浮窗
+        AutomationOverlay.temporaryHide()
         service.clickAwait(x, y, durationMs = config.longPressDurationMs)
+        AutomationOverlay.restoreVisibility()
         service.awaitWindowEvent(service.lastWindowEventTime(), timeoutMs = config.tapAwaitWindowTimeoutMs)
         return true
     }
@@ -336,9 +395,12 @@ class ActionExecutor(
         val (x, y) = ActionUtils.parsePointToScreen(element, screenW, screenH)
 
         onLog("执行：Double Tap(${element.first},${element.second})")
+        // 临时隐藏悬浮窗
+        AutomationOverlay.temporaryHide()
         val ok1 = service.clickAwait(x, y, durationMs = config.clickDurationMs)
         delay(config.doubleTapIntervalMs)
         val ok2 = service.clickAwait(x, y, durationMs = config.clickDurationMs)
+        AutomationOverlay.restoreVisibility()
         service.awaitWindowEvent(service.lastWindowEventTime(), timeoutMs = config.tapAwaitWindowTimeoutMs)
         return ok1 && ok2
     }
@@ -369,7 +431,10 @@ class ActionExecutor(
         val (ex, ey) = ActionUtils.parsePointToScreen(exRel to eyRel, screenW, screenH)
 
         onLog("执行：Swipe($sxRel,$syRel -> $exRel,$eyRel, ${dur}ms)")
+        // 临时隐藏悬浮窗
+        AutomationOverlay.temporaryHide()
         service.swipeAwait(sx, sy, ex, ey, dur)
+        AutomationOverlay.restoreVisibility()
         service.awaitWindowEvent(service.lastWindowEventTime(), timeoutMs = config.swipeAwaitWindowTimeoutMs)
         return true
     }

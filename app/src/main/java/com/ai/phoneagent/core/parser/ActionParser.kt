@@ -23,7 +23,7 @@ import com.ai.phoneagent.core.agent.ParsedAgentAction
  * 动作解析器 - 单一职责
  * 
  * 负责解析模型输出的文本，提取动作信息
- * 原逻辑来自 UiAutomationAgent.kt 的 parseAgentAction 方法
+ * 支持 Open-AutoGLM 格式：<think> 和 <answer> XML 标签
  */
 class ActionParser {
     
@@ -50,7 +50,19 @@ class ActionParser {
             return ParsedAgentAction("unknown", null, emptyMap(), "输出被截断，未包含动作")
         }
         
-        // 查找动作开始位置
+        // 尝试从 <answer> 标签中提取动作
+        val answerFromTag = extractFromAnswerTag(original)
+        if (answerFromTag != null) {
+            return parseActionFromString(answerFromTag)
+        }
+        
+        // 尝试从【回答开始】【回答结束】标签提取
+        val answerFromChinese = extractFromChineseTag(original, "回答")
+        if (answerFromChinese != null) {
+            return parseActionFromString(answerFromChinese)
+        }
+        
+        // 查找动作开始位置（兜底）
         val finishIndex = original.lastIndexOf("finish(")
         val doIndex = original.lastIndexOf("do(")
         val startIndex = when {
@@ -61,6 +73,38 @@ class ActionParser {
         }
         val trimmed = if (startIndex >= 0) original.substring(startIndex).trim() else original
 
+        return parseActionFromString(trimmed)
+    }
+    
+    /**
+     * 从 <answer> XML 标签中提取动作
+     */
+    private fun extractFromAnswerTag(text: String): String? {
+        val pattern = Regex("""<answer>\s*(.*?)\s*</answer>""", RegexOption.DOT_MATCHES_ALL)
+        return pattern.find(text)?.groupValues?.getOrNull(1)?.trim()
+    }
+    
+    /**
+     * 从【回答开始】【回答结束】标签提取
+     */
+    private fun extractFromChineseTag(text: String, tagName: String): String? {
+        val startTag = "【${tagName}开始】"
+        val endTag = "【${tagName}结束】"
+        val startIdx = text.indexOf(startTag)
+        val endIdx = text.indexOf(endTag)
+        
+        if (startIdx >= 0 && endIdx >= 0 && endIdx > startIdx) {
+            return text.substring(startIdx + startTag.length, endIdx).trim()
+        }
+        return null
+    }
+    
+    /**
+     * 从字符串中解析动作
+     */
+    private fun parseActionFromString(content: String): ParsedAgentAction {
+        val trimmed = content.trim()
+        
         // 解析 finish
         if (trimmed.startsWith("finish")) {
             val messageRegex = Regex(
@@ -70,12 +114,12 @@ class ActionParser {
             val message = messageRegex.find(trimmed)?.groupValues?.getOrNull(1) ?: ""
             return ParsedAgentAction("finish", null, mapOf("message" to message), trimmed)
         }
-
+        
         // 检查是否为 do 动作
         if (!trimmed.startsWith("do")) {
             return ParsedAgentAction("unknown", null, emptyMap(), trimmed.take(200))
         }
-
+        
         // 找到参数区域的括号
         val openParenIndex = trimmed.indexOf('(')
         if (openParenIndex < 0) {
@@ -130,10 +174,17 @@ class ActionParser {
     }
     
     /**
-     * 从思考和回答中提取动作
+     * 从思考和回答中提取动作 - 兼容旧格式
      */
     fun parseWithThinking(content: String): Pair<String?, String> {
         val full = content.trim()
+        
+        // 尝试 Open-AutoGLM 格式：<think> 和 <answer>
+        val thinkFromTag = extractFromThinkTag(full)
+        val answerFromTag = extractFromAnswerTag(full)
+        if (answerFromTag != null) {
+            return thinkFromTag to answerFromTag
+        }
         
         // 尝试 Aries 思考格式
         val ariesResult = extractAriesThinkingAndAnswer(full)
@@ -165,6 +216,14 @@ class ActionParser {
         }
         
         return null to full
+    }
+    
+    /**
+     * 从 <think> 标签提取思考
+     */
+    private fun extractFromThinkTag(text: String): String? {
+        val pattern = Regex("""<think>\s*(.*?)\s*</think>""", RegexOption.DOT_MATCHES_ALL)
+        return pattern.find(text)?.groupValues?.getOrNull(1)?.trim()?.ifBlank { null }
     }
     
     /**
@@ -276,4 +335,3 @@ class ActionParser {
         return 0
     }
 }
-

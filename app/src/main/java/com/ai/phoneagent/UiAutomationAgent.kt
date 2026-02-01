@@ -110,7 +110,7 @@ class UiAutomationAgent(
         val history = mutableListOf<ChatRequestMessage>()
         history += ChatRequestMessage(
             role = "system",
-            content = PromptTemplates.buildSystemPrompt(screenW, screenH, config)
+            content = PromptTemplates.buildSystemPrompt(screenW, screenH, null)
         )
         
         // 清理缓存
