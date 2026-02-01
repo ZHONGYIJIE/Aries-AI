@@ -1,0 +1,106 @@
+NOTICE
+=======
+
+Aries AI - Android UI Automation Framework
+Copyright (C) 2025-2026 ZG0704666
+
+This software includes the following third-party libraries and components:
+
+================================================================================
+
+AndroidX Libraries (Apache-2.0)
+-------------------------------
+- AndroidX Core KTX
+- AndroidX AppCompat
+- Material Components for Android
+- AndroidX RecyclerView
+- AndroidX ConstraintLayout
+- AndroidX Lifecycle Runtime KTX
+- AndroidX Work Runtime KTX
+
+Copyright (c) The Android Open Source Project
+
+https://developer.android.com/studio/build/dependencies#apache2-license
+
+================================================================================
+
+Kotlin Standard Library & Coroutines (Apache-2.0)
+-------------------------------------------------
+- Kotlin Standard Library
+- Kotlinx Coroutines
+
+Copyright (c) JetBrains s.r.o.
+
+https://github.com/JetBrains/kotlin/blob/master/license/apache-2.0.txt
+
+================================================================================
+
+OkHttp (Apache-2.0)
+-------------------
+HTTP client for Android and Java
+
+Copyright (c) Square, Inc.
+
+https://github.com/square/okhttp/blob/master/LICENSE.txt
+
+================================================================================
+
+Retrofit (Apache-2.0)
+---------------------
+Type-safe HTTP client for Android and Java
+
+Copyright (c) Square, Inc.
+
+https://github.com/square/retrofit/blob/master/LICENSE.txt
+
+================================================================================
+
+Gson (Apache-2.0)
+-----------------
+JSON serialization/deserialization library
+
+Copyright (c) Google Inc.
+
+https://github.com/google/gson/blob/main/LICENSE
+
+================================================================================
+
+Markwon (Apache-2.0)
+--------------------
+Markdown rendering for Android
+
+Copyright (c) noties.io
+
+https://github.com/noties/Markwon/blob/master/LICENSE
+
+================================================================================
+
+Sherpa-ncnn (Apache-2.0)
+------------------------
+Offline speech recognition engine
+
+Copyright (c) Sherpa Project
+
+https://github.com/k2-fsa/sherpa-ncnn
+
+================================================================================
+
+JetBrains Annotations (Apache-2.0)
+----------------------------------
+Annotations library for Kotlin
+
+Copyright (c) JetBrains s.r.o.
+
+https://github.com/JetBrains/java-annotations/blob/master/LICENSE
+
+================================================================================
+
+This software is also licensed under the GNU Affero General Public License
+version 3 (AGPL-3.0-only). See the LICENSE file for details.
+
+================================================================================
+
+ATTENTION: This software may be distributed as a network service. If you
+distribute this software as a network service, you are required under the
+AGPL-3.0 license to provide the complete corresponding source code to users
+who interact with your service. See the LICENSE file for full license terms.

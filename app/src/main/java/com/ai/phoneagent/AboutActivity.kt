@@ -1,3 +1,20 @@
+/*
+ * Aries AI - Android UI Automation Framework
+ * Copyright (C) 2025-2026 ZG0704666
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
 package com.ai.phoneagent
 
 import android.content.ClipData
@@ -609,12 +626,19 @@ class AboutActivity : AppCompatActivity() {
             License("AndroidX Core KTX", "Kotlin extensions for Android core libraries", "Apache-2.0"),
             License("AndroidX AppCompat", "Backward-compatible Android UI components", "Apache-2.0"),
             License("Material Components", "Material Design components for Android", "Apache-2.0"),
-            License("Kotlin Coroutines", "Kotlin coroutines support", "Apache-2.0"),
-            License("OkHttp", "HTTP client for Android and Java", "Apache-2.0"),
-            License("Gson", "JSON serialization/deserialization library", "Apache-2.0"),
-            License("sherpa-ncnn", "Offline speech recognition engine", "Apache-2.0"),
             License("AndroidX RecyclerView", "Efficient list display widget", "Apache-2.0"),
             License("AndroidX ConstraintLayout", "Flexible layout manager", "Apache-2.0"),
+            License("AndroidX Lifecycle", "Lifecycle-aware components", "Apache-2.0"),
+            License("AndroidX Work", "Background task scheduling", "Apache-2.0"),
+            License("Kotlin Coroutines", "Asynchronous programming support", "Apache-2.0"),
+            License("OkHttp", "HTTP client for Android and Java", "Apache-2.0"),
+            License("OkHttp Logging Interceptor", "HTTP logging interceptor", "Apache-2.0"),
+            License("Retrofit", "Type-safe HTTP client", "Apache-2.0"),
+            License("Gson", "JSON serialization/deserialization library", "Apache-2.0"),
+            License("Markwon Core", "Markdown rendering for Android", "Apache-2.0"),
+            License("Markwon Extensions", "Tables, Strikethrough, Syntax highlight", "Apache-2.0"),
+            License("sherpa-ncnn", "Offline speech recognition engine", "Apache-2.0"),
+            License("JetBrains Annotations", "Annotations for Kotlin", "Apache-2.0"),
         )
 
         val body = licenses.joinToString("\n\n") { lic ->
