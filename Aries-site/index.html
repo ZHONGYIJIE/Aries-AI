@@ -5,7 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aries AI - 开启手机智能新交互</title>
-    <link rel="icon" type="image/png" href="../app/src/main/res/drawable/ic_launcher_foreground.png">
+    <!-- Favicons -->
+    <link rel="icon" type="image/png" href="./assets/favicon.png?v=3">
+    <link rel="apple-touch-icon" href="./assets/favicon.png?v=3">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -888,10 +890,8 @@
             <div class="flex justify-between h-20 items-center">
                 <!-- Logo -->
                 <div class="flex items-center gap-3 cursor-pointer group" onclick="window.scrollTo(0,0)">
-                    <div
-                        class="w-9 h-9 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-blue-500/30 group-hover:shadow-blue-500/50 transition-all duration-300">
-                        A
-                    </div>
+                    <img src="./assets/favicon.png" alt="Aries AI"
+                        class="w-10 h-10 rounded-xl shadow-lg shadow-blue-500/30 group-hover:shadow-blue-500/50 transition-all duration-300 object-cover">
                     <span class="text-xl font-bold tracking-tight dark:text-white text-gray-900 transition-colors">Aries
                         AI</span>
                 </div>
@@ -1385,29 +1385,15 @@
                 type="button" aria-label="关闭">✕</button>
 
             <div class="flex items-start gap-3 sm:gap-4 mb-6 pr-12">
-                <img src="../app/src/main/res/drawable/ic_launcher_foreground.png" alt="Aries AI 图标"
-                    class="w-12 sm:w-14 md:w-16 h-12 sm:h-14 md:h-16 rounded-xl shadow-md border border-white/20 bg-white/80 flex-shrink-0"
-                    style="object-fit:cover;" />
-                <div class="flex-1">
+                <img src="./assets/favicon.png" alt="Aries AI 图标"
+                    class="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl shadow-xl border border-white/20 flex-shrink-0 object-cover" />
+                <div class="flex-1 pt-1">
                     <p class="text-xs uppercase tracking-[0.2em] text-blue-400 mb-1 sm:mb-2">Aries AI</p>
                     <h3 class="text-xl sm:text-2xl md:text-3xl font-bold leading-tight">获取安装包</h3>
                 </div>
             </div>
 
             <div class="space-y-3 sm:space-y-4 mb-6 sm:mb-8">
-                <!-- 本地下载 -->
-                <a id="download-local" href="http://localhost:8888/app-release.apk"
-                    class="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full px-4 sm:px-5 md:px-6 py-4 sm:py-5 md:py-6 rounded-xl sm:rounded-2xl border dark:border-white/10 border-gray-200 hover:border-green-400/60 hover:shadow-lg transition bg-white/80 dark:bg-white/5 gap-2 sm:gap-3 active:scale-95 cursor-pointer min-h-[48px] sm:min-h-[56px]"
-                    download>
-                    <div class="flex-1">
-                        <div class="text-sm sm:text-base md:text-lg font-semibold">📱 本地下载</div>
-                        <div class="text-xs sm:text-sm mt-1 dark:text-gray-300 text-gray-600">V1.2.0 - 本地服务器</div>
-                    </div>
-                    <span
-                        class="text-xs sm:text-sm font-semibold text-green-400 whitespace-nowrap self-start sm:self-auto mt-1 sm:mt-0">推荐</span>
-                </a>
-
-                <!-- GitHub 直连 -->
                 <a id="download-official"
                     href="https://github.com/ZG0704666/Aries-AI/releases/download/V1.2.0/app-release.apk"
                     class="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full px-4 sm:px-5 md:px-6 py-4 sm:py-5 md:py-6 rounded-xl sm:rounded-2xl border dark:border-white/10 border-gray-200 hover:border-blue-400/60 hover:shadow-lg transition bg-white/80 dark:bg-white/5 gap-2 sm:gap-3 active:scale-95 cursor-pointer min-h-[48px] sm:min-h-[56px]"
