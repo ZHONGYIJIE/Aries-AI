@@ -6,7 +6,7 @@
     qqJoinUrl: 'https://qm.qq.com/q/ASVDJPrIxq',
     githubReleasesPageUrl: 'https://github.com/ZG0704666/Aries-AI/releases',
     githubLatestReleaseApi: 'https://api.github.com/repos/ZG0704666/Aries-AI/releases/latest',
-    fixedApkUrl: 'https://github.com/ZG0704666/Aries-AI/releases/download/V1.0.0/app-release.apk',
+    fixedApkUrl: 'https://github.com/ZG0704666/Aries-AI/releases/download/V1.2.0/app-release.apk',
     apps: [
       '淘宝', '支付宝', '美团', '高德地图', '微信', 'QQ', '京东', '知乎', 'B站', '抖音', '小红书', '携程',
       '12306', '饿了么', '拼多多', '闲鱼', '快手', '网易云音乐', '微博', 'Keep', 'WPS', '大众点评', '滴滴出行', '百度地图',
@@ -41,6 +41,41 @@
   }
 
   window.toggleTheme = toggleTheme;
+
+  function toggleMobileMenu() {
+    const menu = document.getElementById('mobile-menu');
+    const backdrop = document.getElementById('mobile-menu-backdrop');
+    if (!menu) return;
+
+    if (menu.classList.contains('translate-x-full')) {
+      menu.classList.remove('translate-x-full');
+      if (backdrop) backdrop.classList.remove('opacity-0', 'pointer-events-none');
+      document.body.style.overflow = 'hidden';
+    } else {
+      menu.classList.add('translate-x-full');
+      if (backdrop) backdrop.classList.add('opacity-0', 'pointer-events-none');
+      document.body.style.overflow = '';
+    }
+  }
+
+  function toggleDocSidebar() {
+    const sidebar = document.getElementById('mobile-sidebar');
+    const backdrop = document.getElementById('mobile-sidebar-backdrop');
+    if (!sidebar) return;
+
+    if (sidebar.classList.contains('-translate-x-full')) {
+      sidebar.classList.remove('-translate-x-full');
+      if (backdrop) backdrop.classList.remove('opacity-0', 'pointer-events-none');
+      document.body.style.overflow = 'hidden';
+    } else {
+      sidebar.classList.add('-translate-x-full');
+      if (backdrop) backdrop.classList.add('opacity-0', 'pointer-events-none');
+      document.body.style.overflow = '';
+    }
+  }
+
+  window.toggleMobileMenu = toggleMobileMenu;
+  window.toggleDocSidebar = toggleDocSidebar;
 
   function initTheme() {
     applyThemeClass(getStoredTheme());
