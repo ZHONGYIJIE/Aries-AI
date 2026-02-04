@@ -762,15 +762,75 @@
                 padding-top: calc(5.25rem + var(--safe-top));
             }
 
-            /* Banner 文案强制单行，必要时允许横向滚动避免溢出 */
+            /* Banner 文案适配 */
             .hero-capsule {
                 max-width: 100%;
-                overflow-x: auto;
-                -webkit-overflow-scrolling: touch;
+                height: auto;
+                white-space: normal;
+                padding: 0.75rem 1.25rem;
+                align-items: center;
+                /* 确保垂直居中 */
+            }
+
+            @media (max-width: 640px) {
+                .hero-capsule {
+                    /* --- 移动端胶囊终极优化 V2 --- */
+                    border-radius: 9999px !important;
+                    background: rgba(255, 255, 255, 0.15) !important;
+                    /* 极度紧凑内边距：上下 6px，左右 12px */
+                    padding: 6px 12px !important;
+                    display: inline-flex !important;
+                    justify-content: center !important;
+                    align-items: center !important;
+                    /* 移除最小高度限制 */
+                    min-height: auto !important;
+                    height: auto !important;
+                    width: auto !important;
+                    max-width: 95% !important;
+                    margin: 0 auto 1.25rem auto !important;
+                }
+
+                /* 内部容器 */
+                .hero-capsule>span.flex {
+                    display: flex !important;
+                    flex-direction: row !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    flex-wrap: nowrap !important;
+                    gap: 6px !important;
+                }
+
+                /* 星星图标 */
+                .hero-capsule>span.flex>span:first-child {
+                    flex-shrink: 0;
+                    display: inline-block;
+                    font-size: 1rem !important;
+                    margin-top: -1px;
+                    /* 微调垂直对齐 */
+                }
+
+                /* 文字部分 */
+                .hero-capsule>span.flex>span:last-child {
+                    font-size: 13px !important;
+                    /* 强制小号文字以尝试单行显示 */
+                    line-height: 1.3 !important;
+                    text-align: left;
+                    /* 左对齐更自然 */
+                    white-space: normal !important;
+                }
             }
 
             .hero-capsule span {
-                white-space: nowrap;
+                white-space: normal;
+                line-height: inherit;
+                /* 继承父级行高 */
+                text-align: center;
+            }
+
+            .hero-capsule .flex {
+                /* 桌面端保持 flex */
+                flex-wrap: wrap;
+                justify-content: center;
             }
 
             /* 跑马灯胶囊在手机端更紧凑 */
@@ -835,6 +895,17 @@
                     <span class="text-xl font-bold tracking-tight dark:text-white text-gray-900 transition-colors">Aries
                         AI</span>
                 </div>
+
+
+                <!-- Hamburger Mobile Menu Button -->
+                <button
+                    class="md:hidden w-10 h-10 flex items-center justify-center rounded-full glass-card border border-white/10 text-gray-600 dark:text-gray-300 active:scale-95 transition"
+                    onclick="toggleMobileMenu()">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M4 6h16M4 12h16M4 18h16"></path>
+                    </svg>
+                </button>
 
                 <!-- Menu (Order Updated) -->
                 <div class="hidden md:flex items-center space-x-8 font-medium text-sm">
@@ -930,7 +1001,7 @@
 
                 <!-- Right: Phone mockup (Android-style light frame) -->
                 <div class="relative flex justify-center lg:justify-end">
-                    <div class="relative w-[270px] sm:w-[320px] md:w-[360px] lg:w-[390px]">
+                    <div class="relative w-[270px] sm:w-[320px] md:w-[360px] lg:w-[390px] max-w-full">
                         <div
                             class="pointer-events-none absolute -inset-10 rounded-[48px] bg-gradient-to-br from-blue-500/25 via-purple-500/18 to-pink-500/18 blur-[40px] dark:from-blue-500/20 dark:via-purple-500/16 dark:to-pink-500/14">
                         </div>
@@ -945,8 +1016,7 @@
 
                             <div
                                 class="relative rounded-[34px] overflow-hidden bg-white dark:bg-black border border-black/10 dark:border-white/10">
-                                <img src="APP界面.jpg" alt="Aries AI 手机界面"
-                                    class="block w-full h-auto select-none" />
+                                <img src="APP界面.jpg" alt="Aries AI 手机界面" class="block w-full h-auto select-none" />
 
                                 <div
                                     class="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/45 via-white/0 to-white/0 dark:from-white/10">
@@ -1282,8 +1352,7 @@
                 </a>
 
                 <a class="inline-flex items-center gap-2 hover:opacity-90 transition glass-card px-4 py-2 rounded-full"
-                    href="/cdn-cgi/l/email-protection#b0cad8d1ded7c9dfded7c1d9f0dedad9c49ed5d4c59ed3de"
-                    style="user-select: text; -webkit-user-select: text;">
+                    href="mailto:zhangyongqi@njit.edu.cn">
                     <span
                         class="w-8 h-8 rounded-xl flex items-center justify-center dark:bg-white/5 bg-black/5 border dark:border-white/10 border-black/10">
                         <svg class="w-4 h-4 dark:text-white text-gray-800" viewBox="0 0 24 24" fill="none"
@@ -1293,8 +1362,7 @@
                             <path d="M4 8l8 5 8-5" />
                         </svg>
                     </span>
-                    <span class="__cf_email__"
-                        data-cfemail="304a58515e57495f5e574159705e5a59441e5554451e535e">[email&#160;protected]</span>
+                    <span>zhangyongqi@njit.edu.cn</span>
                 </a>
 
 
@@ -1327,35 +1395,55 @@
             </div>
 
             <div class="space-y-3 sm:space-y-4 mb-6 sm:mb-8">
+                <!-- 本地下载 -->
+                <a id="download-local" href="http://localhost:8888/app-release.apk"
+                    class="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full px-4 sm:px-5 md:px-6 py-4 sm:py-5 md:py-6 rounded-xl sm:rounded-2xl border dark:border-white/10 border-gray-200 hover:border-green-400/60 hover:shadow-lg transition bg-white/80 dark:bg-white/5 gap-2 sm:gap-3 active:scale-95 cursor-pointer min-h-[48px] sm:min-h-[56px]"
+                    download>
+                    <div class="flex-1">
+                        <div class="text-sm sm:text-base md:text-lg font-semibold">📱 本地下载</div>
+                        <div class="text-xs sm:text-sm mt-1 dark:text-gray-300 text-gray-600">V1.2.0 - 本地服务器</div>
+                    </div>
+                    <span
+                        class="text-xs sm:text-sm font-semibold text-green-400 whitespace-nowrap self-start sm:self-auto mt-1 sm:mt-0">推荐</span>
+                </a>
+
+                <!-- GitHub 直连 -->
                 <a id="download-official"
-                    href="https://github.com/ZG0704666/Aries-AI/releases/download/V1.0.0/app-release.apk"
+                    href="https://github.com/ZG0704666/Aries-AI/releases/download/V1.2.0/app-release.apk"
                     class="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full px-4 sm:px-5 md:px-6 py-4 sm:py-5 md:py-6 rounded-xl sm:rounded-2xl border dark:border-white/10 border-gray-200 hover:border-blue-400/60 hover:shadow-lg transition bg-white/80 dark:bg-white/5 gap-2 sm:gap-3 active:scale-95 cursor-pointer min-h-[48px] sm:min-h-[56px]"
                     target="_blank" rel="noopener noreferrer">
                     <div class="flex-1">
                         <div class="text-sm sm:text-base md:text-lg font-semibold">官方直连</div>
-                        <div class="text-xs sm:text-sm mt-1 dark:text-gray-300 text-gray-600">GitHub Releases 原始链接</div>
+                        <div class="text-xs sm:text-sm mt-1 dark:text-gray-300 text-gray-600">GitHub Releases V1.2.0
+                        </div>
                     </div>
                     <span
                         class="text-xs sm:text-sm font-semibold text-blue-400 whitespace-nowrap self-start sm:self-auto mt-1 sm:mt-0">官方</span>
                 </a>
 
+                <!-- 镜像加速 -->
                 <a id="download-mirror-ghfast"
-                    href="https://ghfast.top/https://github.com/ZG0704666/Aries-AI/releases/download/V1.0.0/app-release.apk"
+                    href="https://ghfast.top/https://github.com/ZG0704666/Aries-AI/releases/download/V1.2.0/app-release.apk"
                     class="flex flex-col sm:flex-row sm:items-center sm:justify-between w-full px-4 sm:px-5 md:px-6 py-4 sm:py-5 md:py-6 rounded-xl sm:rounded-2xl border dark:border-white/10 border-gray-200 hover:border-orange-400/60 hover:shadow-lg transition bg-white/80 dark:bg-white/5 gap-2 sm:gap-3 active:scale-95 cursor-pointer min-h-[48px] sm:min-h-[56px]"
                     target="_blank" rel="noopener noreferrer">
                     <div class="flex-1">
-                        <div class="text-sm sm:text-base md:text-lg font-semibold">镜像加速 1</div>
+                        <div class="text-sm sm:text-base md:text-lg font-semibold">镜像加速</div>
                         <div class="text-xs sm:text-sm mt-1 dark:text-gray-300 text-gray-600">ghfast.top 加速</div>
                     </div>
                     <span
-                        class="text-xs sm:text-sm font-semibold text-orange-400 whitespace-nowrap self-start sm:self-auto mt-1 sm:mt-0">推荐</span>
+                        class="text-xs sm:text-sm font-semibold text-orange-400 whitespace-nowrap self-start sm:self-auto mt-1 sm:mt-0">备用</span>
                 </a>
             </div>
 
             <div
                 class="text-xs sm:text-sm dark:text-gray-400 text-gray-500 leading-relaxed pt-4 sm:pt-6 border-t dark:border-white/10 border-gray-200">
-                <p class="font-semibold text-[13px] sm:text-[14px]"> 下载提示：如点击无响应，请右键"复制链接"在新标签页打开，或加 QQ 群：<span
-                        class="text-blue-400 font-bold">746439473</span></p>
+                <p class="font-semibold text-[13px] sm:text-[14px]">💡 安装提示：</p>
+                <ul class="list-disc list-inside mt-2 space-y-1">
+                    <li>请先开启"未知来源"安装权限</li>
+                    <li>如下载后无法安装，请将文件重命名为 <code
+                            class="px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700">app.apk</code></li>
+                    <li>或加 QQ 群：<span class="text-blue-400 font-bold">746439473</span> 获取帮助</li>
+                </ul>
             </div>
         </div>
     </div>
@@ -1363,6 +1451,32 @@
 
     <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script>
     <script src="./assets/app.js"></script>
+    <script>
+        // Fallback / Inline script to ensure mobile menu works even if app.js fails or is cached
+        function toggleMobileMenu() {
+            const menu = document.getElementById('mobile-menu');
+            const backdrop = document.getElementById('mobile-menu-backdrop');
+            if (!menu) return;
+
+            // Toggle transform class
+            if (menu.classList.contains('translate-x-full')) {
+                menu.classList.remove('translate-x-full');
+                if (backdrop) {
+                    backdrop.classList.remove('opacity-0', 'pointer-events-none');
+                }
+                document.body.style.overflow = 'hidden'; // Prevent scrolling
+            } else {
+                menu.classList.add('translate-x-full');
+                if (backdrop) {
+                    backdrop.classList.add('opacity-0', 'pointer-events-none');
+                }
+                document.body.style.overflow = ''; // Restore scrolling
+            }
+        }
+        // Expose to window immediately
+        window.toggleMobileMenu = toggleMobileMenu;
+    </script>
+
 
     <!-- Cloudflare Pages Analytics -->
     <script defer src='https://static.cloudflareinsights.com/beacon.min.js'
@@ -1372,6 +1486,69 @@
         integrity="sha512-ZpsOmlRQV6y907TI0dKBHq9Md29nnaEIPlkf84rnaERnq6zvWvPUqr2ft8M1aS28oN72PdrCzSjY4U6VaAw1EQ=="
         data-cf-beacon='{"version":"2024.11.0","token":"0cf24ba3d8f54dbb97968500f99a7275","r":1,"server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}'
         crossorigin="anonymous"></script>
+    <!-- Mobile Menu -->
+    <div id="mobile-menu-backdrop"
+        class="fixed inset-0 z-[99] bg-black/60 backdrop-blur-sm opacity-0 pointer-events-none transition-opacity duration-300"
+        onclick="toggleMobileMenu()"></div>
+    <div id="mobile-menu"
+        class="fixed top-0 right-0 w-[280px] h-full z-[100] bg-white/90 dark:bg-[#0a0a12]/95 backdrop-blur-xl border-l border-white/10 shadow-2xl transform translate-x-full transition-transform duration-300 ease-in-out flex flex-col">
+        <div class="flex items-center justify-between p-6 border-b border-gray-200/10 dark:border-white/5">
+            <span class="text-xl font-bold dark:text-white text-gray-900">Aries AI</span>
+            <button
+                class="w-10 h-10 flex items-center justify-center rounded-full bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/20 transition active:scale-95"
+                onclick="toggleMobileMenu()">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </button>
+        </div>
+        <div class="flex-1 overflow-y-auto py-6 px-6 space-y-6">
+            <div class="space-y-4">
+                <a href="#features" onclick="toggleMobileMenu()"
+                    class="block text-base font-medium text-gray-600 dark:text-gray-300 hover:text-blue-500 dark:hover:text-blue-400">核心能力</a>
+                <a href="#cases" onclick="toggleMobileMenu()"
+                    class="block text-base font-medium text-gray-600 dark:text-gray-300 hover:text-blue-500 dark:hover:text-blue-400">成功案例</a>
+                <a href="#apps" onclick="toggleMobileMenu()"
+                    class="block text-base font-medium text-gray-600 dark:text-gray-300 hover:text-blue-500 dark:hover:text-blue-400">支持应用</a>
+                <a href="#roadmap" onclick="toggleMobileMenu()"
+                    class="block text-base font-medium text-gray-600 dark:text-gray-300 hover:text-blue-500 dark:hover:text-blue-400">开发路线</a>
+                <a href="docs-center.html" onclick="toggleMobileMenu()"
+                    class="block text-base font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300">查看技术文档</a>
+            </div>
+
+            <div class="pt-6 border-t border-gray-200/10 dark:border-white/5 space-y-4">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm font-medium text-gray-600 dark:text-gray-400">外观主题</span>
+                    <div class="theme-toggle" onclick="toggleTheme()">
+                        <div class="toggle-dot">
+                            <svg class="w-3 h-3 dark:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                            </svg>
+                            <svg class="w-3 h-3 hidden dark:block" fill="none" viewBox="0 0 24 24"
+                                stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div
+                    class="text-xs text-slate-500 dark:text-slate-400 pt-4 border-t border-gray-100 dark:border-white/5 space-y-2">
+                    <p class="font-bold mb-1 text-slate-700 dark:text-slate-300">联系我们</p>
+                    <p>QQ群：746439473</p>
+                    <p>GitHub 讨论区</p>
+                    <p class="truncate">zhangyongqi@njit.edu.cn</p>
+                    <p class="pt-2 opacity-50">© 2026 Aries AI Project</p>
+                </div>
+            </div>
+
+            <button onclick="document.getElementById('btn-download-nav')?.click(); toggleMobileMenu();"
+                class="w-full py-3 rounded-xl bg-gradient-to-r from-blue-600 to-purple-600 text-white font-bold shadow-lg shadow-blue-500/30">立即体验</button>
+        </div>
+    </div>
 </body>
 
 </html>
