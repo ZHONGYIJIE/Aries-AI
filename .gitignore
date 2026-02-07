@@ -1,5 +1,5 @@
 # Ignore all temp assets and tool copies
-/temp/
+/temp   
 #语音模型
 /app/src/main/assets
 *.iml
@@ -71,3 +71,5 @@ IMPLEMENTATION_GUIDE.md
 PROGRESS_ANALYSIS.md
 .trae/documents/plan_20260113_063756.md
 北京出差汇报_20260130.md
+Aries AI对齐Operit方案 - 详细TODO清单.md
+Aries AI对齐Operit方案 - 详细TODO清单.md

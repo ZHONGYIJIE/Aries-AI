@@ -25,6 +25,9 @@ import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import com.ai.phoneagent.PhoneAgentAccessibilityService
+import com.ai.phoneagent.core.tools.extended.ExtendedAppMapping
+import com.ai.phoneagent.core.tools.file.registerFileTools
+import com.ai.phoneagent.core.tools.network.registerNetworkTools
 import com.ai.phoneagent.data.model.*
 import kotlinx.coroutines.delay
 import java.io.ByteArrayOutputStream
@@ -35,6 +38,8 @@ import java.io.ByteArrayOutputStream
  */
 object ToolRegistration {
 
+    private const val TAG = "ToolRegistration"
+
     /**
      * 注册所有工具
      */
@@ -42,6 +47,21 @@ object ToolRegistration {
         registerUITools(handler, context)
         registerAppTools(handler, context)
         registerSystemTools(handler, context)
+        
+        // 注册网络工具
+        registerNetworkTools(handler, context)
+        
+        // 注册文件系统工具
+        registerFileTools(handler, context)
+        
+        Log.d(TAG, "所有工具注册完成")
+        Log.d(TAG, "- UI 工具: ${getToolCount(handler, "ui")}")
+        Log.d(TAG, "- 应用工具: ${getToolCount(handler, "app")}")
+        Log.d(TAG, "- 系统工具: ${getToolCount(handler, "system")}")
+        Log.d(TAG, "- 网络工具: ${getToolCount(handler, "network")}")
+        Log.d(TAG, "- 文件工具: ${getToolCount(handler, "file")}")
+        Log.d(TAG, "- 总计: ${handler.getAllToolNames().size} 个工具")
+        Log.d(TAG, "- 应用映射: ${ExtendedAppMapping.getAllMappings().size}+ 个应用")
     }
 
     /**
@@ -795,5 +815,34 @@ object ToolRegistration {
                 )
             }
         )
+    }
+    
+    /**
+     * 按类别统计工具数量
+     */
+    private fun getToolCount(handler: AIToolHandler, category: String): Int {
+        val tools = handler.getAllToolNames()
+        return when (category.lowercase()) {
+            "ui" -> tools.count { it in listOf(
+                "tap", "swipe", "screenshot", "get_ui_tree", "get_page_info",
+                "press_back", "press_home", "input_text", "click_element",
+                "set_input_text", "wait_for_element", "press_key", "get_current_app",
+                "scroll_to_element", "find_elements"
+            )}
+            "app" -> tools.count { it in listOf(
+                "launch_app", "get_installed_apps", "get_current_package"
+            )}
+            "system" -> tools.count { it in listOf(
+                "wait", "finish"
+            )}
+            "network" -> tools.count { it in listOf(
+                "http_get", "http_post", "download", "ping", "get_ip", "dns_lookup"
+            )}
+            "file" -> tools.count { it in listOf(
+                "read_file", "write_file", "delete", "list_dir", "create_dir",
+                "exists", "copy", "move", "file_info", "compress"
+            )}
+            else -> 0
+        }
     }
 }

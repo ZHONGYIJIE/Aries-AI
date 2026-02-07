@@ -4,19 +4,62 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import com.ai.phoneagent.PhoneAgentAccessibilityService
+import com.ai.phoneagent.core.tools.extended.ExtendedAppMapping
 import java.util.LinkedHashMap
 
 /**
  * 应用包名管理器
  * 负责缓存和快速查询已安装应用列表
+ * 
+ * 匹配优先级：
+ * 1. 精确匹配（包名、应用名完全相等）
+ * 2. 别名匹配（预设的应用别名）
+ * 3. 单词边界匹配（避免"云"匹配"阿里云盘"和"移动云"）
+ * 4. 智能模糊匹配（作为最后手段）
  */
 object AppPackageManager {
+    
+    private const val TAG = "AppPackageManager"
     
     // 应用缓存（包名 -> 应用名）
     private val appCache = mutableMapOf<String, String>()
     
-    // 反向映射（应用名 -> 包名）
+    // 反向映射（应用名/别名 -> 包名）
     private val appNameToPackage = mutableMapOf<String, String>()
+    
+    // 高优先级关键词映射（用于区分容易混淆的应用）
+    private val highPriorityKeywords = mapOf(
+        // 云服务区分
+        "移动云" to "com.chinamobile.cmcccloud",
+        "移动云手机" to "com.cmcc.pocophone",
+        "阿里云盘" to "com.alicloud.infocloud",
+        "天翼云盘" to "com.ctc.wsyd",
+        "百度网盘" to "com.baidu.netdisk",
+        "腾讯微云" to "com.tencent.wecloud",
+        "坚果云" to "com.jianguoyun",
+        
+        // 手机品牌区分
+        "华为手机" to "com.huawei.system",
+        "小米手机" to "com.xiaomi.misettings",
+        "OPPO手机" to "com.coloros.safecenter",
+        "vivo手机" to "com.iqoo.secure",
+        "荣耀手机" to "com.hihonor.system",
+        
+        // 银行类区分
+        "招商银行" to "cmb.pb",
+        "工商银行" to "com.icbc",
+        "建设银行" to "com.ccb.ccbnetpay",
+        "农业银行" to "com.abchina",
+        "中国银行" to "com.chinamobile.boc",
+        "邮储银行" to "com.psbc",
+        
+        // 视频类区分
+        "腾讯视频" to "com.tencent.qqlive",
+        "爱奇艺视频" to "com.qiyi.video",
+        "优酷视频" to "com.youku.phone",
+        "芒果TV" to "com.hunantv.imgo.activity",
+    )
+    
     private const val RESOLVE_CACHE_TTL_MS = 300_000L // 5分钟
     private const val RESOLVE_CACHE_MAX_ENTRIES = 256
     private val resolveCache = object : LinkedHashMap<String, Pair<String, Long>>(16, 0.75f, true) {
@@ -24,386 +67,43 @@ object AppPackageManager {
             return size > RESOLVE_CACHE_MAX_ENTRIES
         }
     }
-
-    private val predefinedAppPackages: Map<String, String> =
-            listOf(
-                            // ===== 中文社交与通讯 =====
-                            "微信" to "com.tencent.mm",
-                            "wechat" to "com.tencent.mm",
-                            "qq" to "com.tencent.mobileqq",
-                            "微博" to "com.sina.weibo",
-                            "新浪微博" to "com.sina.weibo",
-                            "weibo" to "com.sina.weibo",
-                            "钉钉" to "com.alibaba.android.rimet",
-                            "dingding" to "com.alibaba.android.rimet",
-                            "企业微信" to "com.tencent.wework",
-                            "wework" to "com.tencent.wework",
-                            "陌陌" to "com.immomo.momo",
-                            "momo" to "com.immomo.momo",
-                            "探探" to "com.p1.mobile.putong",
-                            "tantan" to "com.p1.mobile.putong",
-                            "soul" to "cn.soulapp.android",
-                            
-                            // ===== 中文电商 =====
-                            "淘宝" to "com.taobao.taobao",
-                            "淘宝闪购" to "com.taobao.taobao",
-                            "taobao" to "com.taobao.taobao",
-                            "天猫" to "com.tmall.wireless",
-                            "tmall" to "com.tmall.wireless",
-                            "京东" to "com.jingdong.app.mall",
-                            "京东秒送" to "com.jingdong.app.mall",
-                            "jd" to "com.jingdong.app.mall",
-                            "jingdong" to "com.jingdong.app.mall",
-                            "拼多多" to "com.xunmeng.pinduoduo",
-                            "pdd" to "com.xunmeng.pinduoduo",
-                            "pinduoduo" to "com.xunmeng.pinduoduo",
-                            "temu" to "com.einnovation.temu",
-                            "苏宁易购" to "com.suning.mobile.ebuy",
-                            "suning" to "com.suning.mobile.ebuy",
-                            "唯品会" to "com.achievo.vipshop",
-                            "vip" to "com.achievo.vipshop",
-                            
-                            // ===== 中文生活与社区 =====
-                            "小红书" to "com.xingin.xhs",
-                            "xhs" to "com.xingin.xhs",
-                            "redbook" to "com.xingin.xhs",
-                            "豆瓣" to "com.douban.frodo",
-                            "douban" to "com.douban.frodo",
-                            "知乎" to "com.zhihu.android",
-                            "zhihu" to "com.zhihu.android",
-                            "贴吧" to "com.baidu.tieba",
-                            "tieba" to "com.baidu.tieba",
-                            "百度贴吧" to "com.baidu.tieba",
-                            "虎扑" to "com.hupu.shihuo",
-                            "hupu" to "com.hupu.shihuo",
-                            "下厨房" to "com.xiachufang",
-                            "厨房" to "com.xiachufang",
-                            "大麦" to "cn.damai",
-                            "damai" to "cn.damai",
-                            
-                            // ===== 地图与导航 =====
-                            "高德地图" to "com.autonavi.minimap",
-                            "amap" to "com.autonavi.minimap",
-                            "百度地图" to "com.baidu.BaiduMap",
-                            "baidumap" to "com.baidu.BaiduMap",
-                            "腾讯地图" to "com.tencent.map",
-                            "tencent maps" to "com.tencent.map",
-                            "搜狗地图" to "com.sogou.map.android.maps",
-                            "sogou maps" to "com.sogou.map.android.maps",
-                            
-                            // ===== 餐饮与外卖 =====
-                            "美团" to "com.sankuai.meituan",
-                            "meituan" to "com.sankuai.meituan",
-                            "美团外卖" to "com.sankuai.meituan.takeoutnew",
-                            "meituan waimai" to "com.sankuai.meituan.takeoutnew",
-                            "大众点评" to "com.dianping.v1",
-                            "dianping" to "com.dianping.v1",
-                            "饿了么" to "me.ele",
-                            "eleme" to "me.ele",
-                            "肯德基" to "com.yek.android.kfc.activitys",
-                            "kfc" to "com.yek.android.kfc.activitys",
-                            "mcdonald" to "com.mcdonalds.app",
-                            "mcdonalds" to "com.mcdonalds.app",
-                            "必胜客" to "com.pizzahut.pizzahutapp",
-                            "pizza hut" to "com.pizzahut.pizzahutapp",
-                            "星巴克" to "com.starbucks.cn",
-                            "starbucks" to "com.starbucks.cn",
-                            "瑞幸咖啡" to "com.luckincoffee.app",
-                            "luckin" to "com.luckincoffee.app",
-                            
-                            // ===== 旅行与出行 =====
-                            "携程" to "ctrip.android.view",
-                            "ctrip" to "ctrip.android.view",
-                            "铁路12306" to "com.MobileTicket",
-                            "12306" to "com.MobileTicket",
-                            "去哪儿" to "com.Qunar",
-                            "去哪儿旅行" to "com.Qunar",
-                            "qunar" to "com.Qunar",
-                            "滴滴出行" to "com.sdu.didi.psnger",
-                            "didi" to "com.sdu.didi.psnger",
-                            "滴滴" to "com.sdu.didi.psnger",
-                            "飞猪" to "com.taobao.trip",
-                            "fliggy" to "com.taobao.trip",
-                            "马蜂窝" to "com.mafengwo.mall",
-                            "mafengwo" to "com.mafengwo.mall",
-                            "airbnb" to "com.airbnb.android",
-                            "booking.com" to "com.booking",
-                            "booking" to "com.booking",
-                            "expedia" to "com.expedia.bookings",
-                            "agoda" to "com.agoda.mobile.consumer",
-                            "哈啰出行" to "com.jingyao.easybike",
-                            "hellobike" to "com.jingyao.easybike",
-                            "青桔单车" to "com.didi.bike.host",
-                            "qingju" to "com.didi.bike.host",
-                            
-                            // ===== 视频与娱乐 =====
-                            "bilibili" to "tv.danmaku.bili",
-                            "b站" to "tv.danmaku.bili",
-                            "哔哩哔哩" to "tv.danmaku.bili",
-                            "抖音" to "com.ss.android.ugc.aweme",
-                            "douyin" to "com.ss.android.ugc.aweme",
-                            "快手" to "com.smile.gifmaker",
-                            "kuaishou" to "com.smile.gifmaker",
-                            "腾讯视频" to "com.tencent.qqlive",
-                            "tencent video" to "com.tencent.qqlive",
-                            "爱奇艺" to "com.qiyi.video",
-                            "iqiyi" to "com.qiyi.video",
-                            "优酷视频" to "com.youku.phone",
-                            "youku" to "com.youku.phone",
-                            "芒果tv" to "com.hunantv.imgo.activity",
-                            "mango tv" to "com.hunantv.imgo.activity",
-                            "红果短剧" to "com.phoenix.read",
-                            "tiktok" to "com.zhiliaoapp.musically",
-                            "youtube" to "com.google.android.youtube",
-                            "netflix" to "com.netflix.mediaclient",
-                            "西瓜视频" to "com.ss.android.article.video",
-                            "xigua" to "com.ss.android.article.video",
-                            "好看视频" to "com.baidu.haokan",
-                            "haokan" to "com.baidu.haokan",
-                            
-                            // ===== 音乐与音频 =====
-                            "网易云音乐" to "com.netease.cloudmusic",
-                            "netease music" to "com.netease.cloudmusic",
-                            "cloudmusic" to "com.netease.cloudmusic",
-                            "qq音乐" to "com.tencent.qqmusic",
-                            "qq music" to "com.tencent.qqmusic",
-                            "汽水音乐" to "com.luna.music",
-                            "qishui music" to "com.luna.music",
-                            "喜马拉雅" to "com.ximalaya.ting.android",
-                            "ximalaya" to "com.ximalaya.ting.android",
-                            "spotify" to "com.spotify.music",
-                            "apple music" to "com.apple.android.music",
-                            "全民k歌" to "com.tencent.karaoke",
-                            "karaoke" to "com.tencent.karaoke",
-                            "唱吧" to "com.alibaba.ailabs.genie.webapps",
-                            "changba" to "com.alibaba.ailabs.genie.webapps",
-                            "荔枝" to "fm.lizhi.radio",
-                            "lizhi" to "fm.lizhi.radio",
-                            
-                            // ===== 阅读 =====
-                            "番茄小说" to "com.dragon.read",
-                            "番茄免费小说" to "com.dragon.read",
-                            "tomato novel" to "com.dragon.read",
-                            "七猫免费小说" to "com.kmxs.reader",
-                            "qimao" to "com.kmxs.reader",
-                            "起点读书" to "com.qidian.QDReader",
-                            "qidian" to "com.qidian.QDReader",
-                            "掌阅" to "com.zhangyue.read",
-                            "ireader" to "com.zhangyue.read",
-                            "微信读书" to "com.tencent.weread",
-                            "weread" to "com.tencent.weread",
-                            "kindle" to "com.amazon.kindle",
-                            "书旗小说" to "com.shuqi.controller",
-                            "shuqi" to "com.shuqi.controller",
-                            
-                            // ===== 生产力工具 =====
-                            "飞书" to "com.ss.android.lark",
-                            "feishu" to "com.ss.android.lark",
-                            "lark" to "com.ss.android.lark",
-                            "qq邮箱" to "com.tencent.androidqqmail",
-                            "qq mail" to "com.tencent.androidqqmail",
-                            "网易邮箱" to "com.netease.mail",
-                            "netease mail" to "com.netease.mail",
-                            "万得office" to "cn.wps.moffice_eng",
-                            "wps" to "cn.wps.moffice_eng",
-                            "office" to "com.microsoft.office.officehubrow",
-                            "microsoft office" to "com.microsoft.office.officehubrow",
-                            "word" to "com.microsoft.office.word",
-                            "excel" to "com.microsoft.office.excel",
-                            "powerpoint" to "com.microsoft.office.powerpoint",
-                            "支付宝" to "com.eg.android.AlipayGphone",
-                            "alipay" to "com.eg.android.AlipayGphone",
-                            
-                            // ===== 医疗健康 =====
-                            "医院挂号通" to "com.guahao001.proj.yygh_app",
-                            "guahao" to "com.guahao001.proj.yygh_app",
-                            "医院挂号网" to "dtys.guahaowang",
-                            "guahaowang" to "dtys.guahaowang",
-                            "银行" to "com.icbc",
-                            "icbc" to "com.icbc",
-                            
-                            // ===== AI与工具 =====
-                            "豆包" to "com.larus.nova",
-                            "doubao" to "com.larus.nova",
-                            "chatgpt" to "com.openai.chatgpt",
-                            "文心一言" to "com.iflytek.spark",
-                            "spark" to "com.iflytek.spark",
-                            "科大讯飞" to "com.iflytek.inputmethod",
-                            "iflytek" to "com.iflytek.inputmethod",
-                            
-                            // ===== 健康与运动 =====
-                            "keep" to "com.gotokeep.keep",
-                            "美柚" to "com.lingan.seeyou",
-                            "meiyou" to "com.lingan.seeyou",
-                            "薪豆" to "com.jinxin.xindong",
-                            "mint" to "com.jinxin.xindong",
-                            "步多多" to "com.pdd.health",
-                            "buduo" to "com.pdd.health",
-                            "春雨计步" to "com.jiuxian.weather.pedometer",
-                            "pedometer" to "com.jiuxian.weather.pedometer",
-                            "丁香医生" to "com.dingxiangyisheng.dxy",
-                            "dingxiang" to "com.dingxiangyisheng.dxy",
-                            
-                            // ===== 新闻与资讯 =====
-                            "腾讯新闻" to "com.tencent.news",
-                            "tencent news" to "com.tencent.news",
-                            "今日头条" to "com.ss.android.article.news",
-                            "toutiao" to "com.ss.android.article.news",
-                            "网易新闻" to "com.netease.newsreader.activity",
-                            "netease news" to "com.netease.newsreader.activity",
-                            "经济日报" to "com.smartnews.jrj",
-                            "百度" to "com.baidu.searchbox",
-                            "baidu" to "com.baidu.searchbox",
-                            
-                            // ===== 房产 =====
-                            "贝壳找房" to "com.lianjia.beike",
-                            "beike" to "com.lianjia.beike",
-                            "安居客" to "com.anjuke.android.app",
-                            "anjuke" to "com.anjuke.android.app",
-                            "链家" to "com.lianjia.sh",
-                            "lianjia" to "com.lianjia.sh",
-                            "中原地产" to "com.zhongyuan.centaline",
-                            "centaline" to "com.zhongyuan.centaline",
-                            
-                            // ===== 金融 =====
-                            "同花顺" to "com.hexin.plat.android",
-                            "tonghuashun" to "com.hexin.plat.android",
-                            "东方财富" to "com.eastmoney.android.berlin",
-                            "eastmoney" to "com.eastmoney.android.berlin",
-                            "建行" to "com.ccb.ccbnetpay",
-                            "ccb" to "com.ccb.ccbnetpay",
-                            "工商银行" to "com.icbc",
-                            "招商银行" to "cmb.pb",
-                            "cmb" to "cmb.pb",
-                            
-                            // ===== 游戏 =====
-                            "星穹铁道" to "com.miHoYo.hkrpg",
-                            "崩坏：星穹铁道" to "com.miHoYo.hkrpg",
-                            "honkai star rail" to "com.miHoYo.hkrpg",
-                            "崩坏3" to "com.mihoyo.bh3.global",
-                            "honkai impact" to "com.mihoyo.bh3.global",
-                            "原神" to "com.miHoYo.ys",
-                            "genshin impact" to "com.miHoYo.ys",
-                            "恋与深空" to "com.papegames.lysk.cn",
-                            "love and deepspace" to "com.papegames.lysk.cn",
-                            "明日方舟" to "com.hypergryph.arknights",
-                            "arknights" to "com.hypergryph.arknights",
-                            "阴阳师" to "com.netease.onmyoji",
-                            "onmyoji" to "com.netease.onmyoji",
-                            "王者荣耀" to "com.tencent.tmgp.sgame",
-                            "honor of kings" to "com.tencent.tmgp.sgame",
-                            "和平精英" to "com.tencent.tmgp.pubgm",
-                            "pubg mobile" to "com.tencent.tmgp.pubgm",
-                            "minecraft" to "com.mojang.minecraftpe",
-                            "我的世界" to "com.mojang.minecraftpe",
-                            
-                            // ===== Android系统设置 (多种变体) =====
-                            "androidsystemsettings" to "com.android.settings",
-                            "android system settings" to "com.android.settings",
-                            "android  system settings" to "com.android.settings",
-                            "android-system-settings" to "com.android.settings",
-                            "settings" to "com.android.settings",
-                            
-                            // ===== Android系统工具 =====
-                            "audiorecorder" to "com.android.soundrecorder",
-                            "chrome" to "com.android.chrome",
-                            "google chrome" to "com.android.chrome",
-                            "clock" to "com.android.deskclock",
-                            "contacts" to "com.android.contacts",
-                            "files" to "com.android.fileexplorer",
-                            "file manager" to "com.android.fileexplorer",
-                            
-                            // ===== Google生态系统 =====
-                            "gmail" to "com.google.android.gm",
-                            "googlemail" to "com.google.android.gm",
-                            "google mail" to "com.google.android.gm",
-                            "googlefiles" to "com.google.android.apps.nbu.files",
-                            "filesbygoogle" to "com.google.android.apps.nbu.files",
-                            "files by google" to "com.google.android.apps.nbu.files",
-                            "googlecalendar" to "com.google.android.calendar",
-                            "google-calendar" to "com.google.android.calendar",
-                            "google calendar" to "com.google.android.calendar",
-                            "googlechat" to "com.google.android.apps.dynamite",
-                            "google chat" to "com.google.android.apps.dynamite",
-                            "google-chat" to "com.google.android.apps.dynamite",
-                            "googleclock" to "com.google.android.deskclock",
-                            "google-clock" to "com.google.android.deskclock",
-                            "google clock" to "com.google.android.deskclock",
-                            "googlecontacts" to "com.google.android.contacts",
-                            "google-contacts" to "com.google.android.contacts",
-                            "google contacts" to "com.google.android.contacts",
-                            "googledocs" to "com.google.android.apps.docs.editors.docs",
-                            "google docs" to "com.google.android.apps.docs.editors.docs",
-                            "google drive" to "com.google.android.apps.docs",
-                            "google-drive" to "com.google.android.apps.docs",
-                            "googledrive" to "com.google.android.apps.docs",
-                            "googlefit" to "com.google.android.apps.fitness",
-                            "google fit" to "com.google.android.apps.fitness",
-                            "googlekeep" to "com.google.android.keep",
-                            "google keep" to "com.google.android.keep",
-                            "googlemaps" to "com.google.android.apps.maps",
-                            "google maps" to "com.google.android.apps.maps",
-                            "google play books" to "com.google.android.apps.books",
-                            "google-play-books" to "com.google.android.apps.books",
-                            "googleplaybooks" to "com.google.android.apps.books",
-                            "googleplaystore" to "com.android.vending",
-                            "google play store" to "com.android.vending",
-                            "google-play-store" to "com.android.vending",
-                            "play store" to "com.android.vending",
-                            "googleslides" to "com.google.android.apps.docs.editors.slides",
-                            "google slides" to "com.google.android.apps.docs.editors.slides",
-                            "google-slides" to "com.google.android.apps.docs.editors.slides",
-                            "googletasks" to "com.google.android.apps.tasks",
-                            "google-tasks" to "com.google.android.apps.tasks",
-                            "google tasks" to "com.google.android.apps.tasks",
-                            "google translate" to "com.google.android.apps.translate",
-                            "translate" to "com.google.android.apps.translate",
-                            "google photos" to "com.google.android.apps.photos",
-                            "photos" to "com.google.android.apps.photos",
-                            
-                            // ===== 国际第三方应用 =====
-                            "bluecoins" to "com.rammigsoftware.bluecoins",
-                            "broccoli" to "com.flauschcode.broccoli",
-                            "duolingo" to "com.duolingo",
-                            "joplin" to "net.cozic.joplin",
-                            "osmand" to "net.osmand",
-                            "pimusicplayer" to "com.Project100Pi.themusicplayer",
-                            "quora" to "com.quora.android",
-                            "reddit" to "com.reddit.frontpage",
-                            "retromusic" to "code.name.monkey.retromusic",
-                            "simplecalendarpro" to "com.scientificcalculatorplus.simplecalculator.basiccalculator.mathcalc",
-                            "simplesmsmessenger" to "com.simplemobiletools.smsmessenger",
-                            "telegram" to "org.telegram.messenger",
-                            "twitter" to "com.twitter.android",
-                            "x" to "com.twitter.android",
-                            "vlc" to "org.videolan.vlc",
-                            "whatsapp" to "com.whatsapp",
-                            "facebook" to "com.facebook.katana",
-                            "instagram" to "com.instagram.android",
-                            "discord" to "com.discord",
-                            "zoom" to "us.zoom.videomeetings",
-                            "skype" to "com.skype.raider",
-                            "snapchat" to "com.snapchat.android",
-                            "pinterest" to "com.pinterest",
-                            "linkedin" to "com.linkedin.android",
-                            "uber" to "com.ubercab",
-                            "lyft" to "com.lyft",
-                            "paypal" to "com.paypal.android.p2pmobile",
-                            "amazon" to "com.amazon.mshop.android.shopping",
-                            "ebay" to "com.ebay.mobile",
-                    )
-                    .associate { (name, pkg) -> name.lowercase() to pkg }
     
     private var lastUpdateTime = 0L
-    private const val CACHE_VALIDITY_MS = 300000 // 5分钟缓存时间
-
-    private fun preloadPredefinedMappings() {
-        predefinedAppPackages.forEach { (name, pkg) ->
+    private const val CACHE_VALIDITY_MS = 300000L // 5分钟缓存时间
+    
+    /**
+     * 加载所有映射到缓存
+     */
+    private fun loadAllMappings() {
+        // 1. 加载高优先级关键词（最先加载，优先匹配）
+        highPriorityKeywords.forEach { (name, pkg) ->
+            val lowerName = name.lowercase()
+            appNameToPackage[lowerName] = pkg
+            // 保留原始名称作为精确匹配键
             appNameToPackage[name] = pkg
             appNameToPackage[pkg.lowercase()] = pkg
         }
+        
+        // 2. 加载扩展映射表 (250+ 应用)
+        ExtendedAppMapping.getAllMappings().forEach { (name, pkg) ->
+            val lowerName = name.lowercase()
+            appNameToPackage[lowerName] = pkg
+            appNameToPackage[pkg.lowercase()] = pkg
+        }
+        
+        // 3. 计算统计信息
+        logMappingStats()
     }
-
+    
+    private fun logMappingStats() {
+        val totalMappings = appNameToPackage.size
+        val highPriorityCount = highPriorityKeywords.size
+        val extendedCount = ExtendedAppMapping.getAllMappings().size
+        
+        android.util.Log.d(TAG, "映射加载完成: 总数=$totalMappings, " +
+                "高优先级=$highPriorityCount, 扩展=$extendedCount")
+    }
+    
     private fun cacheResolution(key: String, packageName: String) {
         synchronized(resolveCache) {
             resolveCache[key] = packageName to System.currentTimeMillis()
@@ -424,7 +124,9 @@ object AppPackageManager {
         appCache.clear()
         appNameToPackage.clear()
         synchronized(resolveCache) { resolveCache.clear() }
-        preloadPredefinedMappings()
+        
+        // 加载所有预设映射
+        loadAllMappings()
         
         try {
             val packageManager = context.packageManager
@@ -435,14 +137,16 @@ object AppPackageManager {
                 if (app.flags and ApplicationInfo.FLAG_SYSTEM == 0 || isImportantSystemApp(app.packageName)) {
                     val appName = packageManager.getApplicationLabel(app).toString()
                     appCache[app.packageName] = appName
-                    appNameToPackage[appName.lowercase()] = app.packageName
                     
-                    // 也缓存包名本身（以防用户直接用包名）
+                    // 缓存应用名（小写）用于模糊匹配
+                    appNameToPackage[appName.lowercase()] = app.packageName
                     appNameToPackage[app.packageName.lowercase()] = app.packageName
                 }
             }
             
             lastUpdateTime = currentTime
+            
+            android.util.Log.d(TAG, "应用缓存初始化完成: 已安装应用=${appCache.size}, 总映射=${appNameToPackage.size}")
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -465,7 +169,7 @@ object AppPackageManager {
     }
     
     /**
-     * 根据应用名或包名解析包名
+     * 智能解析包名（防止误匹配的核心逻辑）
      * @param query 应用名或包名
      * @return 包名，未找到返回null
      */
@@ -491,22 +195,120 @@ object AppPackageManager {
             return pkg
         }
         
-        // 首先尝试直接匹配（包名或精确应用名）
+        // ===== 优先级1: 精确匹配 =====
+        // 1.1 包名直接匹配
         appNameToPackage[lowerQuery]?.let { return record(it) }
         appNameToPackage[trimmedQuery]?.let { return record(it) }
         
-        // 模糊匹配：查找包含该关键字的应用
-        val keyword = lowerQuery
+        // 1.2 应用名精确匹配（不区分大小写）
         appNameToPackage.entries.firstOrNull { (name, _) ->
-            name.contains(keyword) && !name.startsWith(".")
+            name.equals(lowerQuery) || name.equals(trimmedQuery)
         }?.value?.let { return record(it) }
         
-        // 反向查找：查找应用名包含关键字
-        appCache.entries.firstOrNull { (_, appName) ->
-            appName.lowercase().contains(keyword)
-        }?.key?.let { return record(it) }
+        // ===== 优先级2: 高优先级关键词匹配（防止误匹配的关键） =====
+        // 2.1 完整关键词匹配（优先匹配完整的关键词如"移动云手机"）
+        highPriorityKeywords.keys.firstOrNull { keyword ->
+            lowerQuery.contains(keyword.lowercase()) || 
+            keyword.lowercase().contains(lowerQuery)
+        }?.let { keyword ->
+            highPriorityKeywords[keyword]?.let { return record(it) }
+        }
+        
+        // 2.2 反向检查：如果查询词是某个高优先级词的子串，优先返回该高优先级包
+        highPriorityKeywords.entries.firstOrNull { (keyword, _) ->
+            keyword.lowercase().contains(lowerQuery) && 
+            keyword.length > lowerQuery.length
+        }?.value?.let { return record(it) }
+        
+        // ===== 优先级3: 单词边界匹配 =====
+        // 避免"云"匹配到"阿里云盘"和"移动云"
+        // 只有当查询包含空格或足够长时才进行单词边界匹配
+        if (lowerQuery.contains(" ") || lowerQuery.length >= 4) {
+            appNameToPackage.entries.firstOrNull { (name, _) ->
+                // 检查是否是单词边界匹配
+                isWordBoundaryMatch(lowerQuery, name)
+            }?.value?.let { return record(it) }
+        }
+        
+        // ===== 优先级4: 智能模糊匹配（最后手段） =====
+        // 4.1 反向查找：已安装应用中，应用名包含查询词
+        val installedMatch = appCache.entries.firstOrNull { (_, appName) ->
+            val lowerAppName = appName.lowercase()
+            // 避免太短的匹配，至少匹配2个字符
+            lowerQuery.length >= 2 && (
+                lowerAppName == lowerQuery ||
+                lowerAppName.contains(lowerQuery) ||
+                // 检查是否是完整单词匹配
+                isCompleteWordMatch(lowerQuery, lowerAppName)
+            )
+        }?.key
+        
+        if (installedMatch != null) {
+            return record(installedMatch)
+        }
+        
+        // 4.2 预设映射中的模糊匹配
+        val mappedMatch = appNameToPackage.entries.firstOrNull { (name, _) ->
+            name.length > lowerQuery.length && // 避免匹配太短的名称
+            name.contains(lowerQuery) &&
+            !name.startsWith(".") && // 排除包名片段
+            !lowerQuery.startsWith("com") // 如果查询不是以com开头，避免匹配包名
+        }?.value
+        
+        if (mappedMatch != null) {
+            return record(mappedMatch)
+        }
+        
+        // 4.3 如果是有效的包名格式，直接返回（作为最后手段）
+        if (isValidPackageName(trimmedQuery)) {
+            return record(trimmedQuery)
+        }
         
         return null
+    }
+    
+    /**
+     * 检查是否是单词边界匹配
+     * 例如："云手机" 应该匹配 "移动云手机" 而不是单独的"云"
+     */
+    private fun isWordBoundaryMatch(query: String, name: String): Boolean {
+        val queryWords = query.split(" ", "，", ",", "·", "•")
+        val nameWords = name.split(" ", "，", ",", "·", "•")
+        
+        // 检查查询词是否全部包含在名称中
+        return queryWords.all { word ->
+            nameWords.any { nameWord -> 
+                nameWord.contains(word) || word.contains(nameWord)
+            }
+        }
+    }
+    
+    /**
+     * 检查是否是完整单词匹配
+     */
+    private fun isCompleteWordMatch(query: String, text: String): Boolean {
+        val words = text.split(Regex("[\\s_\\-]"))
+        return words.any { word -> 
+            word.equals(query, ignoreCase = true) ||
+            word.startsWith(query, ignoreCase = true)
+        }
+    }
+    
+    /**
+     * 检查是否是有效的Android包名格式
+     */
+    private fun isValidPackageName(name: String): Boolean {
+        return name.matches(Regex("^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)*$"))
+    }
+    
+    /**
+     * 根据应用标签解析包名（兼容旧API）
+     */
+    fun resolvePackageByLabel(
+        service: PhoneAgentAccessibilityService,
+        appName: String
+    ): String? {
+        return resolvePackageName(appName)
     }
     
     /**
@@ -536,12 +338,14 @@ object AppPackageManager {
     }
     
     /**
-     * 根据应用标签解析包名（兼容旧API）
+     * 获取映射统计信息
      */
-    fun resolvePackageByLabel(
-        service: PhoneAgentAccessibilityService,
-        appName: String
-    ): String? {
-        return resolvePackageName(appName)
+    fun getStats(): Map<String, Any> {
+        return mapOf(
+            "totalMappings" to appNameToPackage.size,
+            "installedApps" to appCache.size,
+            "highPriorityKeywords" to highPriorityKeywords.size,
+            "extendedMappings" to ExtendedAppMapping.getAllMappings().size
+        )
     }
 }

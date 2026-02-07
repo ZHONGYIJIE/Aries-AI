@@ -88,6 +88,7 @@ class ActionExecutor(
             ?: action.fields["package_name"]
             ?: action.fields["pkg"]
             ?: action.fields["app"]
+            ?: action.fields["app_name"]
             ?: ""
         val t = rawTarget.trim().trim('"', '\'', ' ')
         if (t.isBlank()) return false
@@ -125,30 +126,33 @@ class ActionExecutor(
         // 初始化 AppPackageManager 缓存（确保能查询已安装应用）
         com.ai.phoneagent.core.tools.AppPackageManager.initializeCache(service)
 
-        // 构建候选包名列表 - 优先级：精确匹配 > 预定义映射 > 已安装应用列表 > 模糊匹配
+        // 智能解析包名 - 使用新的智能匹配逻辑
+        val smartResolved = com.ai.phoneagent.core.tools.AppPackageManager.resolvePackageName(t)
+
+        // 构建候选包名列表 - 优先级：智能解析 > 精确匹配 > 已安装应用列表
         val candidates = buildList {
-            // 1. 如果输入看起来像包名（包含多个点），优先尝试
+            // 1. 智能解析（包含高优先级关键词匹配、防误匹配逻辑）
+            if (smartResolved != null) {
+                add(smartResolved)
+            }
+            // 2. 如果输入看起来像包名（包含多个点），优先尝试
             if (t.contains('.') && t.count { it == '.' } >= 1) {
                 add(t)
             }
-            // 2. 预定义映射（AppPackageMapping - 常用应用）
-            com.ai.phoneagent.AppPackageMapping.resolve(t)?.let { add(it) }
             // 3. 已安装应用列表精确匹配
             com.ai.phoneagent.core.tools.AppPackageManager.resolvePackageByLabel(service, t)?.let { add(it) }
-            // 4. 如果输入不包含点，直接作为应用名尝试
-            if (!t.contains('.')) {
-                add(t)
-            }
         }.distinct()
 
-        // 如果候选列表为空，尝试从已安装应用列表中模糊搜索
+        // 如果候选列表为空，从已安装应用中智能搜索
         val finalCandidates = if (candidates.isEmpty()) {
-            // 兜底：从已安装应用中模糊搜索应用名包含关键字的
             val allApps = com.ai.phoneagent.core.tools.AppPackageManager.getAllInstalledApps()
             allApps.filter { (_, appName) ->
+                // 智能匹配：应用名包含查询词，或查询词包含应用名（作为完整单词）
                 appName.contains(t, ignoreCase = true) ||
-                t.contains(appName, ignoreCase = true)
-            }.map { it.first }.take(5) // 最多取5个候选
+                t.contains(appName, ignoreCase = true) ||
+                // 单词边界匹配：避免"云"匹配"阿里云盘"
+                isWordBoundaryMatch(t, appName)
+            }.map { it.first }.take(3) // 最多取3个候选，避免误匹配
         } else {
             candidates
         }
@@ -179,12 +183,29 @@ class ActionExecutor(
         )
 
         return try {
+            // 后台静默启动 - 快速启动不等待UI
             LaunchProxyActivity.launch(service, intent)
-            service.awaitWindowEvent(beforeTime, timeoutMs = config.launchAwaitWindowTimeoutMs)
-            true
+            true // 静默启动，不等待窗口事件
         } catch (e: Exception) {
             onLog("Launch 失败：${e.message.orEmpty()}")
             false
+        }
+    }
+
+    /**
+     * 单词边界匹配 - 避免"云"误匹配"阿里云盘"和"移动云手机"
+     */
+    private fun isWordBoundaryMatch(query: String, text: String): Boolean {
+        val queryWords = query.lowercase().split(Regex("[\\s_\\-]")).filter { it.length >= 2 }
+        val textWords = text.lowercase().split(Regex("[\\s_\\-]"))
+        
+        // 查询词必须全部包含在文本中，且至少匹配一个完整单词
+        return queryWords.all { word ->
+            textWords.any { textWord ->
+                textWord.contains(word) || word.contains(textWord)
+            }
+        } && textWords.any { textWord ->
+            queryWords.any { word -> textWord.startsWith(word) || word.startsWith(textWord) }
         }
     }
 

@@ -463,45 +463,54 @@ class UiAutomationAgent(
             Regex("""(?:open|launch|start|switch\s+to|go\s+to)\s*(\S+)""", RegexOption.IGNORE_CASE),
         )
         
-        var appMatch: AppPackageMapping.Match? = null
+        // 初始化应用包名管理器
+        com.ai.phoneagent.core.tools.AppPackageManager.initializeCache(service)
+        
+        var resolvedPackage: String? = null
+        var matchedAppName: String? = null
         
         for (pattern in launchPatterns) {
             val matchResult = pattern.find(task)
             if (matchResult != null) {
                 val potentialApp = matchResult.groupValues.getOrNull(1)?.trim()
                 if (!potentialApp.isNullOrBlank()) {
-                    val resolved = AppPackageMapping.resolve(potentialApp)
-                    if (resolved != null) {
-                        appMatch = AppPackageMapping.Match(
-                            appLabel = potentialApp,
-                            packageName = resolved,
-                            start = matchResult.range.first,
-                            end = matchResult.range.last
-                        )
+                    // 使用新的智能解析（包含防误匹配逻辑、高优先级关键词）
+                    resolvedPackage = com.ai.phoneagent.core.tools.AppPackageManager.resolvePackageName(potentialApp)
+                    if (resolvedPackage != null) {
+                        matchedAppName = potentialApp
                         break
                     }
                 }
             }
         }
         
-        if (appMatch == null) {
-            appMatch = AppPackageMapping.bestMatchInText(task)
+        // 如果正则匹配失败，尝试全文搜索已安装应用
+        if (resolvedPackage == null) {
+            val allApps = com.ai.phoneagent.core.tools.AppPackageManager.getAllInstalledApps()
+            for ((pkg, appName) in allApps) {
+                if (task.contains(appName, ignoreCase = true)) {
+                    resolvedPackage = pkg
+                    matchedAppName = appName
+                    break
+                }
+            }
         }
         
-        if (appMatch == null) {
+        if (resolvedPackage == null) {
+            onLog("[⚡快速启动] 未在文本中识别到有效应用名称")
             return false
         }
         
         val currentApp = service.currentAppPackage()
-        if (currentApp == appMatch.packageName) {
-            onLog("[⚡快速启动] ${appMatch.appLabel} 已在前台，跳过启动（无需连接模型）")
+        if (currentApp == resolvedPackage) {
+            onLog("[⚡快速启动] ${matchedAppName} 已在前台，跳过启动（无需连接模型）")
             return true
         }
         
         val pm = service.packageManager
-        val intent = pm.getLaunchIntentForPackage(appMatch.packageName)
+        val intent = pm.getLaunchIntentForPackage(resolvedPackage)
         if (intent == null) {
-            onLog("[⚡快速启动] 未找到 ${appMatch.appLabel}(${appMatch.packageName}) 的启动入口")
+            onLog("[⚡快速启动] 未找到 ${matchedAppName}(${resolvedPackage}) 的启动入口")
             return false
         }
         
@@ -514,7 +523,7 @@ class UiAutomationAgent(
         try {
             val beforeTime = service.lastWindowEventTime()
             LaunchProxyActivity.launch(service, intent)
-            onLog("[⚡快速启动] 后台启动 ${appMatch.appLabel}（无需连接模型，节省时间）")
+            onLog("[⚡快速启动] 后台启动 ${matchedAppName}（无需连接模型，节省时间）")
             // 等待更长时间确保应用加载完成
             service.awaitWindowEvent(beforeTime, timeoutMs = config.appLaunchWaitTimeoutMs)
             delay(config.appLaunchExtraDelayMs)
@@ -524,10 +533,10 @@ class UiAutomationAgent(
             
             // 验证应用是否真的启动了
             val newApp = service.currentAppPackage()
-            if (newApp != appMatch.packageName) {
-                onLog("[⚡快速启动] ${appMatch.appLabel} 启动验证失败（当前：$newApp），将在后续步骤中处理")
+            if (newApp != resolvedPackage) {
+                onLog("[⚡快速启动] ${matchedAppName} 启动验证失败（当前：$newApp），将在后续步骤中处理")
             } else {
-                onLog("[⚡快速启动] ${appMatch.appLabel} 启动成功，继续后续操作...")
+                onLog("[⚡快速启动] ${matchedAppName} 启动成功，继续后续操作...")
             }
             return true
         } catch (e: Exception) {
