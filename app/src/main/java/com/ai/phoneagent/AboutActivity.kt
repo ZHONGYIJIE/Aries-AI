@@ -77,6 +77,17 @@ class AboutActivity : AppCompatActivity() {
 
     private val releaseRepo = ReleaseRepository()
 
+    private fun currentVersionName(): String {
+        val fromBuildConfig = BuildConfig.VERSION_NAME?.trim().orEmpty()
+        if (fromBuildConfig.isNotBlank()) return fromBuildConfig
+
+        return try {
+            packageManager.getPackageInfo(packageName, 0).versionName?.trim().orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityAboutBinding.inflate(layoutInflater)
@@ -85,6 +96,7 @@ class AboutActivity : AppCompatActivity() {
         setupEdgeToEdge()
         setupToolbar()
         setupClickListeners()
+        binding.tvAppVersion.text = "V${currentVersionName()}"
 
         // 入场动画
         binding.root.post {
@@ -573,12 +585,7 @@ class AboutActivity : AppCompatActivity() {
     }
 
     private fun checkForUpdates(showLinksDialogIfNew: Boolean = false) {
-        val currentVersion =
-            try {
-                packageManager.getPackageInfo(packageName, 0).versionName ?: ""
-            } catch (_: Exception) {
-                ""
-            }
+        val currentVersion = currentVersionName()
 
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) { releaseRepo.fetchLatestReleaseResilient(includePrerelease = false) }
