@@ -22,8 +22,8 @@
 
 | 软件 | 最低版本 | 推荐版本 | 下载地址 |
 |------|----------|----------|----------|
-| JDK | 17 | 17 (Temurin) | https://adoptium.net/temurin/releases/ |
-| Android Studio | Hedgehog (2023.1.1) | Iguana (2023.2.1) | https://developer.android.com/studio |
+| JDK | 17 | Android Studio 自带 JBR（Java 21） | https://developer.android.com/studio |
+| Android Studio | Hedgehog (2023.1.1) | 最新稳定版（建议使用官方稳定版） | https://developer.android.com/studio |
 | Gradle | 以Wrapper为准 | 以Wrapper为准 | 使用项目自带gradlew |
 | Git | 2.30+ | 2.40+ | https://git-scm.com/downloads |
 
@@ -38,7 +38,8 @@
 ```bash
 # 检查JDK版本
 java -version
-# 应输出：openjdk version "17.x.x"
+# 推荐：使用 Android Studio 自带 JBR（通常是 21.x）
+# 兼容：外部 JDK 17/21 也可（以 Gradle Sync/编译结果为准）
 
 # 检查Git版本
 git --version
@@ -49,11 +50,19 @@ git --version
 # 以项目 Gradle Wrapper 输出为准
 ```
 
-### 1.3 环境变量配置
+### 1.4 版本权威来源（请以仓库配置为准）
+
+- **Gradle 版本**：`gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl`
+- **AGP / Kotlin 插件版本**：`gradle/libs.versions.toml`（Version Catalog）
+- **仓库与插件解析源**：`settings.gradle.kts`（`pluginManagement` / `dependencyResolutionManagement`）
+
+### 1.5 环境变量配置
 
 ```bash
 # Windows (PowerShell)
-[System.Environment]::SetEnvironmentVariable("JAVA_HOME", "C:\Program Files\Eclipse Adoptium\jdk-17.0.12-hotspot")
+# 推荐：不需要手动配置 JAVA_HOME，优先让 Android Studio 使用自带 JBR (Java 21)
+# 兼容：如果你想使用外部 JDK，可设置为 JDK 17 或 21 的安装目录
+[System.Environment]::SetEnvironmentVariable("JAVA_HOME", "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.x-hotspot")
 [System.Environment]::SetEnvironmentVariable("ANDROID_HOME", "C:\Users\YourName\AppData\Local\Android\Sdk")
 
 # 添加到PATH
@@ -233,7 +242,7 @@ git checkout -b feature/ui-tree-张三
 ```
 Gradle JDK:
   ☑ Use Gradle JDK
-  ☑ Use project JDK (17)
+  ☑ 使用 Android Studio 自带 JBR（推荐）
 
 Gradle VM options:
   -Xmx2048m -Dfile.encoding=UTF-8
@@ -244,9 +253,8 @@ Gradle VM options:
 打开`File > Settings > Build, Execution, Deployment > Compiler > Kotlin Compiler`：
 
 ```
-Language version: 2.0
-Target JVM version: 11
-API version: 1.7
+Language version: 以项目 Gradle 配置/插件版本为准
+Target JVM version: 以项目 Gradle 配置为准
 ```
 
 ### 5.3 同步Gradle
@@ -338,13 +346,13 @@ adb logcat | grep "PhoneAgent"
 1. 配置国内镜像源，编辑`gradle/wrapper/gradle-wrapper.properties`：
 
 ```properties
-distributionUrl=https\://mirrors.cloud.tencent.com/gradle/gradle-8.5-bin.zip
+distributionUrl=https\://mirrors.cloud.tencent.com/gradle/gradle-8.13-bin.zip
 ```
 
 2. 或者配置阿里云镜像：
 
 ```properties
-distributionUrl=https\://maven.aliyun.com/repository/gradle-plugin
+distributionUrl=https\://mirrors.aliyun.com/gradle/gradle-8.13-bin.zip
 ```
 
 ### 7.2 依赖下载失败
@@ -353,17 +361,31 @@ distributionUrl=https\://maven.aliyun.com/repository/gradle-plugin
 
 **解决方案**：
 
-1. 配置Maven镜像，编辑`build.gradle.kts`：
+1. 配置Maven镜像，请优先编辑`settings.gradle.kts`：
 
 ```kotlin
-repositories {
-    maven { url = uri("https://maven.aliyun.com/repository/public") }
-    maven { url = uri("https://maven.aliyun.com/repository/google") }
-    maven { url = uri("https://maven.aliyun.com/repository/central") }
-    google()
-    mavenCentral()
+pluginManagement {
+    repositories {
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositories {
+        maven { url = uri("https://maven.aliyun.com/repository/public") }
+        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        maven { url = uri("https://maven.aliyun.com/repository/central") }
+        google()
+        mavenCentral()
+    }
 }
 ```
+
+> 注意：本项目启用了 `repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)`，不建议在各模块的 `build.gradle(.kts)` 中新增 `repositories {}`，否则可能触发构建失败。
 
 2. 使用代理（如果需要）：
 
