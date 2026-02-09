@@ -777,7 +777,7 @@ cd phone-agent
 
 ## 开发指南
 
-详见 [BUILDING.md](docs/BUILDING.md)
+详见 [BUILDING.md](./BUILDING.md)
 
 ## 代码规范
 

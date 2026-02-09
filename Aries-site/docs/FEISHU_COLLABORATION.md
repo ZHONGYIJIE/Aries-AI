@@ -1,4 +1,4 @@
-# Phone Agent 飞书协作文档模板
+# Aries AI 飞书协作文档模板
 
 > 本文档提供飞书协作文档的模板，用于团队开发进度追踪、问题解决、代码审查等。
 
@@ -205,7 +205,7 @@
 - [BUILDING.md](./BUILDING.md) - 环境搭建和编译指南
 - [CODING_STANDARDS.md](./CODING_STANDARDS.md) - 代码规范
 - [GIT_WORKFLOW.md](./GIT_WORKFLOW.md) - Git工作流
-- [README.md](./README.md) - 项目概述
+- [README.md](../../README.md) - 项目概述
 
 ---
 
