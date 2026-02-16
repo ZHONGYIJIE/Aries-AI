@@ -12,19 +12,18 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
-import android.media.ImageReader
-import android.os.SystemClock
 import android.view.KeyEvent
+import com.ai.phoneagent.input.VirtualAsyncInputInjector
+import com.ai.phoneagent.vdiso.ImeFocusDeadlockController
+import com.ai.phoneagent.vdiso.ShizukuVirtualDisplayEngine
 import java.io.ByteArrayOutputStream
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import com.ai.phoneagent.vdiso.ShizukuVirtualDisplayEngine
-import com.ai.phoneagent.vdiso.ImeFocusDeadlockController
-import com.ai.phoneagent.input.VirtualAsyncInputInjector
 
 /**
  * 虚拟屏/虚拟隔离模式的 Kotlin 侧门面（Facade）。
@@ -32,18 +31,18 @@ import com.ai.phoneagent.input.VirtualAsyncInputInjector
  * **用途**
  * - 根据配置决定是否启用"虚拟隔离模式"。
  * - 在虚拟隔离模式下：
- *   - 通过 [ShizukuVirtualDisplayEngine] 创建/复用 VirtualDisplay，并维护当前 `displayId`。
- *   - 提供"截图/输入注入/聚焦显示"等能力给上层（Kotlin UI 与 Python 侧设备抽象）。
+ * - 通过 [ShizukuVirtualDisplayEngine] 创建/复用 VirtualDisplay，并维护当前 `displayId`。
+ * - 提供"截图/输入注入/聚焦显示"等能力给上层（Kotlin UI 与 Python 侧设备抽象）。
  * - 在主屏模式下：
- *   - 确保虚拟屏被停止并清理状态。
+ * - 确保虚拟屏被停止并清理状态。
  *
  * **典型用法**
  * - 任务开始前（例如 `BackgroundAutomationManager` 执行任务前）：
- *   - `val did = VirtualDisplayController.prepareForTask(context, adbExecPath)`
+ * - `val did = VirtualDisplayController.prepareForTask(context, adbExecPath)`
  * - Python 侧截图：
- *   - `VirtualDisplayController.screenshotPngBase64NonBlack()`（由 Chaquopy 反射调用/静态调用）
+ * - `VirtualDisplayController.screenshotPngBase64NonBlack()`（由 Chaquopy 反射调用/静态调用）
  * - 注入点击：
- *   - `VirtualDisplayController.injectTapBestEffort(displayId, x, y)`
+ * - `VirtualDisplayController.injectTapBestEffort(displayId, x, y)`
  *
  * **使用注意事项**
  * - 依赖 Shizuku：若 binder 不可用或权限未授予，本控制器会返回 `null` 并报错。
@@ -53,14 +52,11 @@ object VirtualDisplayController {
 
     private const val TAG = "AriesVirtualDisplay"
 
-    @Volatile
-    private var activeDisplayId: Int? = null
+    @Volatile private var activeDisplayId: Int? = null
 
-    @Volatile
-    private var welcomeShownForCurrentVd: Boolean = false
+    @Volatile private var welcomeShownForCurrentVd: Boolean = false
 
-    @Volatile
-    private var lifecycleObserverInstalled: Boolean = false
+    @Volatile private var lifecycleObserverInstalled: Boolean = false
 
     // IME 焦点死锁防护控制器
     private val imeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -79,28 +75,30 @@ object VirtualDisplayController {
     private val focusHandler = Handler(Looper.getMainLooper())
 
     /**
-     * **连续焦点强制执行**：每 100ms 检查&恢复焦点到主屏。
-     * 这是比"周期性"（2 秒）更激进的隔离策略，确保焦点在任何时刻都尽可能在主屏。
-     * 
+     * **连续焦点强制执行**：每 100ms 检查&恢复焦点到主屏。 这是比"周期性"（2 秒）更激进的隔离策略，确保焦点在任何时刻都尽可能在主屏。
+     *
      * 虽然 IPC 频繁，但获益是：虚拟屏与主屏基本完全独立。
      */
-    private val focusEnforcementRunnable = object : Runnable {
-        private var lastRestoreMs = 0L
+    private val focusEnforcementRunnable =
+            object : Runnable {
+                private var lastRestoreMs = 0L
 
-        override fun run() {
-            if (activeDisplayId != null && activeDisplayId!! > 0) {
-                val now = SystemClock.uptimeMillis()
-                // 100ms 间隔内最多调用一次（避免极端频繁）
-                if (now - lastRestoreMs >= 80L) {
-                    lastRestoreMs = now
-                    runCatching { ShizukuVirtualDisplayEngine.restoreFocusToDefaultDisplay() }
+                override fun run() {
+                    if (activeDisplayId != null && activeDisplayId!! > 0) {
+                        val now = SystemClock.uptimeMillis()
+                        // 100ms 间隔内最多调用一次（避免极端频繁）
+                        if (now - lastRestoreMs >= 80L) {
+                            lastRestoreMs = now
+                            runCatching {
+                                ShizukuVirtualDisplayEngine.restoreFocusToDefaultDisplay()
+                            }
+                        }
+                    }
+                    if (isVirtualDisplayStarted()) {
+                        focusHandler.postDelayed(this, FOCUS_ENFORCEMENT_INTERVAL_MS)
+                    }
                 }
             }
-            if (isVirtualDisplayStarted()) {
-                focusHandler.postDelayed(this, FOCUS_ENFORCEMENT_INTERVAL_MS)
-            }
-        }
-    }
 
     private fun startFocusEnforcement() {
         focusHandler.removeCallbacks(focusEnforcementRunnable)
@@ -111,35 +109,23 @@ object VirtualDisplayController {
         focusHandler.removeCallbacks(focusEnforcementRunnable)
     }
 
-    /**
-     * 标记当前是否应该使用虚拟屏模式
-     * 在 prepareForTask 被调用时设置，也可以通过 setShouldUseVirtualDisplay 外部设置
-     */
+    /** 标记当前是否应该使用虚拟屏模式 在 prepareForTask 被调用时设置，也可以通过 setShouldUseVirtualDisplay 外部设置 */
     @Volatile
     var shouldUseVirtualDisplay: Boolean = false
         private set
 
-    /**
-     * 外部设置是否应该使用虚拟屏模式
-     */
+    /** 外部设置是否应该使用虚拟屏模式 */
     fun setShouldUseVirtualDisplay(value: Boolean) {
         shouldUseVirtualDisplay = value
     }
 
-    /**
-     * 检查虚拟屏是否已启动并可用
-     */
+    /** 检查虚拟屏是否已启动并可用 */
     fun isVirtualDisplayStarted(): Boolean = activeDisplayId != null && activeDisplayId!! > 0
 
-    /**
-     * 获取当前活动的 displayId
-     */
+    /** 获取当前活动的 displayId */
     fun getDisplayId(): Int? = activeDisplayId
 
-    /**
-     * 获取虚拟屏内容尺寸（用于坐标换算/预览比例）
-     * 优先使用 GL dispatcher 的最新 content size；若不可用则回退到 VirtualDisplayConfig。
-     */
+    /** 获取虚拟屏内容尺寸（用于坐标换算/预览比例） 优先使用 GL dispatcher 的最新 content size；若不可用则回退到 VirtualDisplayConfig。 */
     fun getContentSizeBestEffort(context: Context? = null): Pair<Int, Int> {
         val latest = runCatching { ShizukuVirtualDisplayEngine.getLatestContentSize() }.getOrNull()
         val lw = latest?.first ?: 0
@@ -161,9 +147,12 @@ object VirtualDisplayController {
     fun prepareForTask(context: Context, adbExecPath: String): Int? {
         // 标记应该使用虚拟屏
         shouldUseVirtualDisplay = true
-        
-        Log.i(TAG, "prepareForTask: start, pingBinder=${ShizukuBridge.pingBinder()}, hasPermission=${ShizukuBridge.hasPermission()}")
-        
+
+        Log.i(
+                TAG,
+                "prepareForTask: start, pingBinder=${ShizukuBridge.pingBinder()}, hasPermission=${ShizukuBridge.hasPermission()}"
+        )
+
         // 检查 Shizuku 权限
         if (!ShizukuBridge.pingBinder()) {
             Log.e(TAG, "Shizuku binder not ready - please start Shizuku app first")
@@ -190,18 +179,19 @@ object VirtualDisplayController {
 
         // 使用 Shizuku VirtualDisplay 引擎创建虚拟屏
         Log.i(TAG, "Creating VirtualDisplay: size=${vdW}x${vdH}, dpi=$vdDpi")
-        val r = ShizukuVirtualDisplayEngine.ensureStarted(
-            ShizukuVirtualDisplayEngine.Args(
-                name = "Aries-Virtual",
-                width = vdW,
-                height = vdH,
-                dpi = vdDpi,
-                refreshRate = 0f,
-                rotatesWithContent = false,
-                ownerPackage = "com.android.shell",
-            )
-        )
-        
+        val r =
+                ShizukuVirtualDisplayEngine.ensureStarted(
+                        ShizukuVirtualDisplayEngine.Args(
+                                name = "Aries-Virtual",
+                                width = vdW,
+                                height = vdH,
+                                dpi = vdDpi,
+                                refreshRate = 0f,
+                                rotatesWithContent = false,
+                                ownerPackage = "com.android.shell",
+                        )
+                )
+
         if (r.isSuccess) {
             val did = r.getOrNull()
             Log.i(TAG, "VirtualDisplay created successfully: displayId=$did")
@@ -228,37 +218,31 @@ object VirtualDisplayController {
 
             return did
         }
-        
+
         Log.w(TAG, "ShizukuVirtualDisplayEngine.ensureStarted failed", r.exceptionOrNull())
         activeDisplayId = null
         welcomeShownForCurrentVd = false
         return null
     }
 
-    /**
-     * 为 Monitor 确保虚拟屏存在
-     */
+    /** 为 Monitor 确保虚拟屏存在 */
     @Synchronized
     fun ensureVirtualDisplayForMonitor(context: Context): Int? {
         return prepareForTask(context, "")
     }
 
-    /**
-     * 启动 Monitor
-     */
+    /** 启动 Monitor */
     @Synchronized
     fun startMonitor(context: Context): Boolean {
         return ensureVirtualDisplayForMonitor(context) != null
     }
 
-    /**
-     * 截图并返回 Base64 PNG 字符串
-     */
+    /** 截图并返回 Base64 PNG 字符串 */
     @JvmStatic
     fun screenshotPngBase64(): String {
         val did = activeDisplayId ?: return ""
         if (!ShizukuVirtualDisplayEngine.isStarted()) return ""
-        
+
         // 严格隔离模式：截图不抢焦点，避免主屏物理按键被路由到虚拟屏
 
         val bmp = ShizukuVirtualDisplayEngine.captureLatestBitmap().getOrNull() ?: return ""
@@ -274,13 +258,11 @@ object VirtualDisplayController {
         }
     }
 
-    /**
-     * 截图并返回非黑帧的 Base64 PNG 字符串
-     */
+    /** 截图并返回非黑帧的 Base64 PNG 字符串 */
     @JvmStatic
     fun screenshotPngBase64NonBlack(
-        maxWaitMs: Long = 1500L,
-        pollIntervalMs: Long = 80L,
+            maxWaitMs: Long = 1500L,
+            pollIntervalMs: Long = 80L,
     ): String {
         val did = activeDisplayId ?: return ""
         if (!ShizukuVirtualDisplayEngine.isStarted()) return ""
@@ -319,8 +301,7 @@ object VirtualDisplayController {
     /**
      * 焦点管理 — 完全隔离模式下此方法为 NO-OP。
      *
-     * 焦点始终驻留在主屏（display 0），虚拟屏操作通过 displayId 定向注入。
-     * 不再切换系统焦点到虚拟屏，避免用户的物理按键/手势返回影响虚拟屏。
+     * 焦点始终驻留在主屏（display 0），虚拟屏操作通过 displayId 定向注入。 不再切换系统焦点到虚拟屏，避免用户的物理按键/手势返回影响虚拟屏。
      */
     @JvmStatic
     fun ensureFocusedDisplayBestEffort(): Boolean {
@@ -328,45 +309,48 @@ object VirtualDisplayController {
         return true
     }
 
-    /**
-     * 立即恢复焦点到主屏（display 0）。
-     * 用于 Activity 启动后、任务结束、虚拟屏清理等场景。
-     */
+    /** 立即恢复焦点到主屏（display 0）。 用于 Activity 启动后、任务结束、虚拟屏清理等场景。 */
     @JvmStatic
     fun restoreFocusToDefaultDisplayNow() {
         runCatching { ShizukuVirtualDisplayEngine.restoreFocusToDefaultDisplay() }
     }
 
-
-
     private val asyncInputInjector by lazy { VirtualAsyncInputInjector() }
 
-    /**
-     * 注入点击事件（best-effort）
-     */
+    /** 注入点击事件（best-effort） */
     @JvmStatic
     fun injectTapBestEffort(displayId: Int, x: Int, y: Int) {
         if (displayId <= 0) return
         if (!ShizukuBridge.pingBinder() || !ShizukuBridge.hasPermission()) return
-        
+
         val downTime = SystemClock.uptimeMillis()
         runCatching {
-            asyncInputInjector.injectSingleTouchAsync(displayId, downTime, x.toFloat(), y.toFloat(), android.view.MotionEvent.ACTION_DOWN)
-            asyncInputInjector.injectSingleTouchAsync(displayId, downTime, x.toFloat(), y.toFloat(), android.view.MotionEvent.ACTION_UP)
+            asyncInputInjector.injectSingleTouchAsync(
+                    displayId,
+                    downTime,
+                    x.toFloat(),
+                    y.toFloat(),
+                    android.view.MotionEvent.ACTION_DOWN
+            )
+            asyncInputInjector.injectSingleTouchAsync(
+                    displayId,
+                    downTime,
+                    x.toFloat(),
+                    y.toFloat(),
+                    android.view.MotionEvent.ACTION_UP
+            )
         }
     }
 
-    /**
-     * 注入滑动事件（best-effort）
-     */
+    /** 注入滑动事件（best-effort） */
     @JvmStatic
     fun injectSwipeBestEffort(
-        displayId: Int,
-        startX: Int,
-        startY: Int,
-        endX: Int,
-        endY: Int,
-        durationMs: Long
+            displayId: Int,
+            startX: Int,
+            startY: Int,
+            endX: Int,
+            endY: Int,
+            durationMs: Long
     ) {
         if (displayId <= 0) return
         if (!ShizukuBridge.pingBinder() || !ShizukuBridge.hasPermission()) return
@@ -374,7 +358,13 @@ object VirtualDisplayController {
         val downTime = SystemClock.uptimeMillis()
         val dur = durationMs.coerceAtLeast(1)
         runCatching {
-            asyncInputInjector.injectSingleTouchAsync(displayId, downTime, startX.toFloat(), startY.toFloat(), android.view.MotionEvent.ACTION_DOWN)
+            asyncInputInjector.injectSingleTouchAsync(
+                    displayId,
+                    downTime,
+                    startX.toFloat(),
+                    startY.toFloat(),
+                    android.view.MotionEvent.ACTION_DOWN
+            )
             val startTime = SystemClock.uptimeMillis()
             val endTime = startTime + dur
             while (SystemClock.uptimeMillis() < endTime) {
@@ -382,102 +372,118 @@ object VirtualDisplayController {
                 val frac = (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
                 val ix = (startX + (endX - startX) * frac).toInt()
                 val iy = (startY + (endY - startY) * frac).toInt()
-                asyncInputInjector.injectSingleTouchAsync(displayId, downTime, ix.toFloat(), iy.toFloat(), android.view.MotionEvent.ACTION_MOVE)
+                asyncInputInjector.injectSingleTouchAsync(
+                        displayId,
+                        downTime,
+                        ix.toFloat(),
+                        iy.toFloat(),
+                        android.view.MotionEvent.ACTION_MOVE
+                )
                 try {
                     Thread.sleep(16L)
-                } catch (_: Exception) {
-                }
+                } catch (_: Exception) {}
             }
-            asyncInputInjector.injectSingleTouchAsync(displayId, downTime, endX.toFloat(), endY.toFloat(), android.view.MotionEvent.ACTION_UP)
+            asyncInputInjector.injectSingleTouchAsync(
+                    displayId,
+                    downTime,
+                    endX.toFloat(),
+                    endY.toFloat(),
+                    android.view.MotionEvent.ACTION_UP
+            )
         }
     }
 
-    /**
-     * 注入返回事件（best-effort）
-     */
+    /** 注入返回事件（best-effort） */
     @JvmStatic
     fun injectBackBestEffort(displayId: Int) {
         if (displayId <= 0) return
         if (!ShizukuBridge.pingBinder() || !ShizukuBridge.hasPermission()) return
         runCatching {
-            asyncInputInjector.injectKeyEventAsync(displayId, KeyEvent.KEYCODE_BACK, KeyEvent.ACTION_DOWN)
-            asyncInputInjector.injectKeyEventAsync(displayId, KeyEvent.KEYCODE_BACK, KeyEvent.ACTION_UP)
+            asyncInputInjector.injectKeyEventAsync(
+                    displayId,
+                    KeyEvent.KEYCODE_BACK,
+                    KeyEvent.ACTION_DOWN
+            )
+            asyncInputInjector.injectKeyEventAsync(
+                    displayId,
+                    KeyEvent.KEYCODE_BACK,
+                    KeyEvent.ACTION_UP
+            )
         }
     }
 
-    /**
-     * 注入 Home 事件（best-effort）
-     */
+    /** 注入 Home 事件（best-effort） */
     @JvmStatic
     fun injectHomeBestEffort(displayId: Int) {
         if (displayId <= 0) return
         if (!ShizukuBridge.pingBinder() || !ShizukuBridge.hasPermission()) return
         runCatching {
-            asyncInputInjector.injectKeyEventAsync(displayId, KeyEvent.KEYCODE_HOME, KeyEvent.ACTION_DOWN)
-            asyncInputInjector.injectKeyEventAsync(displayId, KeyEvent.KEYCODE_HOME, KeyEvent.ACTION_UP)
+            asyncInputInjector.injectKeyEventAsync(
+                    displayId,
+                    KeyEvent.KEYCODE_HOME,
+                    KeyEvent.ACTION_DOWN
+            )
+            asyncInputInjector.injectKeyEventAsync(
+                    displayId,
+                    KeyEvent.KEYCODE_HOME,
+                    KeyEvent.ACTION_UP
+            )
         }
     }
 
-    /**
-     * 注入 粘贴 (Ctrl+V) 事件（best-effort）
-     * 用于虚拟屏上的文本输入：先设置剪贴板，再模拟 Ctrl+V 粘贴
-     */
+    /** 注入 粘贴 (Ctrl+V) 事件（best-effort） 用于虚拟屏上的文本输入：先设置剪贴板，再模拟 Ctrl+V 粘贴 */
     @JvmStatic
     fun injectPasteBestEffort(displayId: Int) {
         if (displayId <= 0) return
         if (!ShizukuBridge.pingBinder() || !ShizukuBridge.hasPermission()) return
         runCatching {
             asyncInputInjector.injectKeyComboAsync(
-                displayId,
-                KeyEvent.KEYCODE_V,
-                KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+                    displayId,
+                    KeyEvent.KEYCODE_V,
+                    KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
             )
         }
     }
 
-    /**
-     * 硬重置虚拟屏
-     */
+    /** 硬重置虚拟屏 */
     @Synchronized
     fun hardResetOverlay(context: Context) {
         stopFocusEnforcement()
-        try { ShizukuVirtualDisplayEngine.stop() } catch (_: Exception) {}
+        try {
+            ShizukuVirtualDisplayEngine.stop()
+        } catch (_: Exception) {}
         runCatching { ShizukuVirtualDisplayEngine.restoreFocusToDefaultDisplay() }
 
         activeDisplayId = null
         welcomeShownForCurrentVd = false
     }
 
-    /**
-     * 仅清理 Overlay
-     */
+    /** 仅清理 Overlay */
     @Synchronized
     fun cleanupOverlayOnly(context: Context) {
         stopFocusEnforcement()
-        try { ShizukuVirtualDisplayEngine.stop() } catch (_: Exception) {}
+        try {
+            ShizukuVirtualDisplayEngine.stop()
+        } catch (_: Exception) {}
         runCatching { ShizukuVirtualDisplayEngine.restoreFocusToDefaultDisplay() }
 
         activeDisplayId = null
         welcomeShownForCurrentVd = false
     }
 
-    /**
-     * 异步清理
-     */
+    /** 异步清理 */
     fun cleanupAsync(context: Context) {
-        thread(start = true, name = "VirtualDisplayCleanup") {
-            cleanup(context)
-        }
+        thread(start = true, name = "VirtualDisplayCleanup") { cleanup(context) }
     }
 
-    /**
-     * 清理虚拟屏，并立即恢复焦点到主屏。
-     */
+    /** 清理虚拟屏，并立即恢复焦点到主屏。 */
     @Synchronized
     fun cleanup(context: Context) {
         stopFocusEnforcement()
         stopImeFocusController()
-        try { ShizukuVirtualDisplayEngine.stop() } catch (_: Exception) {}
+        try {
+            ShizukuVirtualDisplayEngine.stop()
+        } catch (_: Exception) {}
         runCatching { ShizukuVirtualDisplayEngine.restoreFocusToDefaultDisplay() }
 
         activeDisplayId = null
@@ -487,41 +493,44 @@ object VirtualDisplayController {
 
     // ─── 私有方法 ───
 
-    /**
-     * 启动 IME 焦点死锁防护控制器
-     */
+    /** 启动 IME 焦点死锁防护控制器 */
     private fun startImeFocusController() {
         if (imeFocusController != null) return
         val ctrl = ImeFocusDeadlockController(imeScope)
-        ctrl.callback = object : ImeFocusDeadlockController.Callback {
-            override fun onLockStateChanged(locked: Boolean, displayId: Int, detail: String) {
-                Log.i(TAG, "IME focus lock: locked=$locked displayId=$displayId detail=${detail.take(120)}")
-            }
-        }
+        ctrl.callback =
+                object : ImeFocusDeadlockController.Callback {
+                    override fun onLockStateChanged(
+                            locked: Boolean,
+                            displayId: Int,
+                            detail: String
+                    ) {
+                        Log.i(
+                                TAG,
+                                "IME focus lock: locked=$locked displayId=$displayId detail=${detail.take(120)}"
+                        )
+                    }
+                }
         ctrl.start()
         imeFocusController = ctrl
         Log.i(TAG, "IME focus deadlock controller started")
     }
 
-    /**
-     * 停止 IME 焦点死锁防护控制器
-     */
+    /** 停止 IME 焦点死锁防护控制器 */
     private fun stopImeFocusController() {
         imeFocusController?.stop()
         imeFocusController = null
     }
 
-    /**
-     * 在虚拟屏上启动 WelcomeActivity 作为兜底界面
-     */
+    /** 在虚拟屏上启动 WelcomeActivity 作为兜底界面 */
     private fun showWelcomeOnActiveDisplayBestEffort(context: Context, displayId: Int) {
         val appContext = context.applicationContext
 
         // 路径1: 使用 ActivityOptions.setLaunchDisplayId 启动 WelcomeActivity
         runCatching {
-            val intent = Intent(appContext, WelcomeActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val intent =
+                    Intent(appContext, WelcomeActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
             val options = ActivityOptions.makeBasic()
             options.setLaunchDisplayId(displayId)
             appContext.startActivity(intent, options.toBundle())
@@ -536,19 +545,23 @@ object VirtualDisplayController {
             thread(start = true, name = "ShowWelcomeOnDisplay") {
                 val component = "${appContext.packageName}/.WelcomeActivity"
                 val flags = 0x10000000 // FLAG_ACTIVITY_NEW_TASK
-                val candidates = listOf(
-                    "cmd activity start-activity --user 0 --display $displayId --windowingMode 1 --activity-reorder-to-front -n $component -f $flags",
-                    "cmd activity start-activity --user 0 --display $displayId --windowingMode 1 -n $component -f $flags",
-                    "cmd activity start-activity --user 0 --display $displayId -n $component -f $flags",
-                    "am start --user 0 --display $displayId -n $component -f $flags",
-                    "am start --display $displayId -n $component -f $flags",
-                )
+                val candidates =
+                        listOf(
+                                "cmd activity start-activity --user 0 --display $displayId --windowingMode 1 --activity-reorder-to-front -n $component -f $flags",
+                                "cmd activity start-activity --user 0 --display $displayId --windowingMode 1 -n $component -f $flags",
+                                "cmd activity start-activity --user 0 --display $displayId -n $component -f $flags",
+                                "am start --user 0 --display $displayId -n $component -f $flags",
+                                "am start --display $displayId -n $component -f $flags",
+                        )
                 for (c in candidates) {
                     val r = runCatching { ShizukuBridge.execResult(c) }.getOrNull()
                     if (r != null) {
                         val err = r.stderrText().trim()
                         val out = r.stdoutText().trim()
-                        Log.i(TAG, "showWelcome exec: exitCode=${r.exitCode} cmd=$c stderr=${err.take(200)} stdout=${out.take(200)}")
+                        Log.i(
+                                TAG,
+                                "showWelcome exec: exitCode=${r.exitCode} cmd=$c stderr=${err.take(200)} stdout=${out.take(200)}"
+                        )
                         if (r.exitCode == 0) {
                             // 系统可能自动将焦点切到 VD，延迟恢复到主屏
                             schedulePostLaunchFocusRestore()
@@ -564,15 +577,15 @@ object VirtualDisplayController {
         Log.w(TAG, "Cannot launch WelcomeActivity: Shizuku not available")
     }
 
-    /**
-     * Activity 在 VD 上启动后，延迟恢复焦点到主屏。
-     * 需要等待系统完成 Activity 创建（~800ms），否则系统可能在恢复后再次自动切焦。
-     */
+    /** Activity 在 VD 上启动后，延迟恢复焦点到主屏。 需要等待系统完成 Activity 创建（~800ms），否则系统可能在恢复后再次自动切焦。 */
     private fun schedulePostLaunchFocusRestore() {
-        focusHandler.postDelayed({
-            restoreFocusToDefaultDisplayNow()
-            Log.d(TAG, "Post-launch focus restored to main display")
-        }, 800)
+        focusHandler.postDelayed(
+                {
+                    restoreFocusToDefaultDisplayNow()
+                    Log.d(TAG, "Post-launch focus restored to main display")
+                },
+                800
+        )
     }
 
     private fun isLikelyBlackBitmap(bmp: Bitmap): Boolean {
@@ -608,6 +621,7 @@ object VirtualDisplayController {
                 y += stepY
             }
             total > 0 && nonBlack < 20
-        }.getOrElse { true }
+        }
+                .getOrElse { true }
     }
 }

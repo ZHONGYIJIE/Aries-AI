@@ -23,13 +23,15 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
-import com.k2fsa.sherpa.ncnn.DecoderConfig
-import com.k2fsa.sherpa.ncnn.FeatureExtractorConfig
 import com.k2fsa.sherpa.ncnn.ModelConfig
 import com.k2fsa.sherpa.ncnn.RecognizerConfig
 import com.k2fsa.sherpa.ncnn.SherpaNcnn
 import com.k2fsa.sherpa.ncnn.getDecoderConfig
 import com.k2fsa.sherpa.ncnn.getFeatureExtractorConfig
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,15 +40,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 基于sherpa-ncnn的本地语音识别实现
- * sherpa-ncnn是一个轻量级、高性能的语音识别引擎，比Vosk更适合移动端
- * 参考: https://github.com/k2-fsa/sherpa-ncnn
+ * 基于sherpa-ncnn的本地语音识别实现 sherpa-ncnn是一个轻量级、高性能的语音识别引擎，比Vosk更适合移动端 参考:
+ * https://github.com/k2-fsa/sherpa-ncnn
  */
 @SuppressLint("MissingPermission")
 class SherpaSpeechRecognizer(private val context: Context) {
@@ -122,14 +119,10 @@ class SherpaSpeechRecognizer(private val context: Context) {
         }
     }
 
-    /**
-     * 检查是否已初始化
-     */
+    /** 检查是否已初始化 */
     fun isReady(): Boolean = isInitialized
 
-    /**
-     * 检查是否正在录音识别
-     */
+    /** 检查是否正在录音识别 */
     fun isListening(): Boolean = isListening
 
     @Throws(IOException::class)
@@ -165,60 +158,76 @@ class SherpaSpeechRecognizer(private val context: Context) {
         val assetModelDir = "sherpa-models/$modelDirName"
         val legacyAssetModelDir = "sherpa-models/models/$modelDirName"
 
-        val requiredFiles = listOf(
-            "encoder_jit_trace-pnnx.ncnn.param",
-            "encoder_jit_trace-pnnx.ncnn.bin",
-            "decoder_jit_trace-pnnx.ncnn.param",
-            "decoder_jit_trace-pnnx.ncnn.bin",
-            "joiner_jit_trace-pnnx.ncnn.param",
-            "joiner_jit_trace-pnnx.ncnn.bin",
-            "tokens.txt",
-        )
+        val requiredFiles =
+                listOf(
+                        "encoder_jit_trace-pnnx.ncnn.param",
+                        "encoder_jit_trace-pnnx.ncnn.bin",
+                        "decoder_jit_trace-pnnx.ncnn.param",
+                        "decoder_jit_trace-pnnx.ncnn.bin",
+                        "joiner_jit_trace-pnnx.ncnn.param",
+                        "joiner_jit_trace-pnnx.ncnn.bin",
+                        "tokens.txt",
+                )
 
         val localModelDir =
-            ensureModelDirReady(
-                assetDir = assetModelDir,
-                targetRootDir = context.filesDir,
-                requiredFiles = requiredFiles
-            ) ?: ensureModelDirReady(
-                assetDir = legacyAssetModelDir,
-                targetRootDir = context.filesDir,
-                requiredFiles = requiredFiles
-            ) ?: return false
+                ensureModelDirReady(
+                        assetDir = assetModelDir,
+                        targetRootDir = context.filesDir,
+                        requiredFiles = requiredFiles
+                )
+                        ?: ensureModelDirReady(
+                                assetDir = legacyAssetModelDir,
+                                targetRootDir = context.filesDir,
+                                requiredFiles = requiredFiles
+                        )
+                                ?: return false
 
-        val featConfig = getFeatureExtractorConfig(sampleRate = SAMPLE_RATE.toFloat(), featureDim = 80)
+        val featConfig =
+                getFeatureExtractorConfig(sampleRate = SAMPLE_RATE.toFloat(), featureDim = 80)
 
-        val modelConfig = ModelConfig(
-            encoderParam = File(localModelDir, "encoder_jit_trace-pnnx.ncnn.param").absolutePath,
-            encoderBin = File(localModelDir, "encoder_jit_trace-pnnx.ncnn.bin").absolutePath,
-            decoderParam = File(localModelDir, "decoder_jit_trace-pnnx.ncnn.param").absolutePath,
-            decoderBin = File(localModelDir, "decoder_jit_trace-pnnx.ncnn.bin").absolutePath,
-            joinerParam = File(localModelDir, "joiner_jit_trace-pnnx.ncnn.param").absolutePath,
-            joinerBin = File(localModelDir, "joiner_jit_trace-pnnx.ncnn.bin").absolutePath,
-            tokens = File(localModelDir, "tokens.txt").absolutePath,
-            numThreads = 2,
-            useGPU = false
-        )
+        val modelConfig =
+                ModelConfig(
+                        encoderParam =
+                                File(localModelDir, "encoder_jit_trace-pnnx.ncnn.param")
+                                        .absolutePath,
+                        encoderBin =
+                                File(localModelDir, "encoder_jit_trace-pnnx.ncnn.bin").absolutePath,
+                        decoderParam =
+                                File(localModelDir, "decoder_jit_trace-pnnx.ncnn.param")
+                                        .absolutePath,
+                        decoderBin =
+                                File(localModelDir, "decoder_jit_trace-pnnx.ncnn.bin").absolutePath,
+                        joinerParam =
+                                File(localModelDir, "joiner_jit_trace-pnnx.ncnn.param")
+                                        .absolutePath,
+                        joinerBin =
+                                File(localModelDir, "joiner_jit_trace-pnnx.ncnn.bin").absolutePath,
+                        tokens = File(localModelDir, "tokens.txt").absolutePath,
+                        numThreads = 2,
+                        useGPU = false
+                )
 
         val decoderConfig = getDecoderConfig(method = "greedy_search", numActivePaths = 4)
 
-        val recognizerConfig = RecognizerConfig(
-            featConfig = featConfig,
-            modelConfig = modelConfig,
-            decoderConfig = decoderConfig,
-            enableEndpoint = true,
-            rule1MinTrailingSilence = 2.4f,
-            rule2MinTrailingSilence = 1.2f,
-            rule3MinUtteranceLength = 20.0f,
-            hotwordsFile = "",
-            hotwordsScore = 1.5f
-        )
+        val recognizerConfig =
+                RecognizerConfig(
+                        featConfig = featConfig,
+                        modelConfig = modelConfig,
+                        decoderConfig = decoderConfig,
+                        enableEndpoint = true,
+                        rule1MinTrailingSilence = 2.4f,
+                        rule2MinTrailingSilence = 1.2f,
+                        rule3MinUtteranceLength = 20.0f,
+                        hotwordsFile = "",
+                        hotwordsScore = 1.5f
+                )
 
         return try {
-            recognizer = SherpaNcnn(
-                config = recognizerConfig,
-                assetManager = null // Force using newFromFile
-            )
+            recognizer =
+                    SherpaNcnn(
+                            config = recognizerConfig,
+                            assetManager = null // Force using newFromFile
+                    )
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create SherpaNcnn instance", e)
@@ -228,9 +237,9 @@ class SherpaSpeechRecognizer(private val context: Context) {
     }
 
     private fun ensureModelDirReady(
-        assetDir: String,
-        targetRootDir: File,
-        requiredFiles: List<String>,
+            assetDir: String,
+            targetRootDir: File,
+            requiredFiles: List<String>,
     ): File? {
         val dirName = assetDir.substringAfterLast('/')
         val targetDir = File(targetRootDir, dirName)
@@ -246,7 +255,10 @@ class SherpaSpeechRecognizer(private val context: Context) {
         // 如果缓存目录存在但不完整（常见于首次运行中断/拷贝失败），需要删除并重新拷贝
         if (!isComplete()) {
             if (targetDir.exists()) {
-                Log.w(TAG, "Model cache is incomplete. Re-copying model files: ${targetDir.absolutePath}")
+                Log.w(
+                        TAG,
+                        "Model cache is incomplete. Re-copying model files: ${targetDir.absolutePath}"
+                )
                 runCatching { targetDir.deleteRecursively() }
             }
             return try {
@@ -282,23 +294,25 @@ class SherpaSpeechRecognizer(private val context: Context) {
         val minBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, channelConfig, audioFormat)
 
         if (minBufferSize <= 0) {
-            listener.onError(IllegalStateException("AudioRecord.getMinBufferSize failed: $minBufferSize"))
+            listener.onError(
+                    IllegalStateException("AudioRecord.getMinBufferSize failed: $minBufferSize")
+            )
             return
         }
 
         val ar =
-            try {
-                AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                    SAMPLE_RATE,
-                    channelConfig,
-                    audioFormat,
-                    minBufferSize * 2
-                )
-            } catch (e: Exception) {
-                listener.onError(e)
-                return
-            }
+                try {
+                    AudioRecord(
+                            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                            SAMPLE_RATE,
+                            channelConfig,
+                            audioFormat,
+                            minBufferSize * 2
+                    )
+                } catch (e: Exception) {
+                    listener.onError(e)
+                    return
+                }
 
         if (ar.state != AudioRecord.STATE_INITIALIZED) {
             runCatching { ar.release() }
@@ -308,13 +322,15 @@ class SherpaSpeechRecognizer(private val context: Context) {
 
         audioRecord = ar
 
-        val started = runCatching {
-            ar.startRecording()
-            true
-        }.getOrElse {
-            listener.onError(it as? Exception ?: RuntimeException(it))
-            false
-        }
+        val started =
+                runCatching {
+                    ar.startRecording()
+                    true
+                }
+                        .getOrElse {
+                            listener.onError(it as? Exception ?: RuntimeException(it))
+                            false
+                        }
 
         if (!started) {
             releaseAudioRecord()
@@ -324,67 +340,66 @@ class SherpaSpeechRecognizer(private val context: Context) {
         isListening = true
         Log.d(TAG, "Started recording")
 
-        recordingJob = scope.launch {
-            try {
-                val bufferSize = minBufferSize
-                val audioBuffer = ShortArray(bufferSize)
-                var lastText = ""
+        recordingJob =
+                scope.launch {
+                    try {
+                        val bufferSize = minBufferSize
+                        val audioBuffer = ShortArray(bufferSize)
+                        var lastText = ""
 
-                while (isActive && isListening) {
-                    val ret = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
-                    if (ret < 0) {
-                        withContext(Dispatchers.Main) {
-                            listener.onError(IOException("AudioRecord.read failed: $ret"))
-                        }
-                        isListening = false
-                        break
-                    }
-                    if (ret > 0) {
-                        val samples = FloatArray(ret) { i -> audioBuffer[i] / 32768.0f }
-                        val currentRecognizer = recognizer ?: break
-
-                        currentRecognizer.acceptSamples(samples)
-                        while (currentRecognizer.isReady()) {
-                            currentRecognizer.decode()
-                        }
-
-                        val isEndpoint = currentRecognizer.isEndpoint()
-                        val text = currentRecognizer.text
-
-                        if (text.isNotBlank() && lastText != text) {
-                            lastText = text
-                            withContext(Dispatchers.Main) {
-                                if (isEndpoint) {
-                                    listener.onResult(text)
-                                } else {
-                                    listener.onPartialResult(text)
-                                }
-                            }
-                        }
-
-                        if (isEndpoint) {
-                            currentRecognizer.reset(false)
-                            isListening = false
-                            if (finalResultEmitted.compareAndSet(false, true)) {
+                        while (isActive && isListening) {
+                            val ret = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: 0
+                            if (ret < 0) {
                                 withContext(Dispatchers.Main) {
-                                    listener.onFinalResult(lastText)
+                                    listener.onError(IOException("AudioRecord.read failed: $ret"))
+                                }
+                                isListening = false
+                                break
+                            }
+                            if (ret > 0) {
+                                val samples = FloatArray(ret) { i -> audioBuffer[i] / 32768.0f }
+                                val currentRecognizer = recognizer ?: break
+
+                                currentRecognizer.acceptSamples(samples)
+                                while (currentRecognizer.isReady()) {
+                                    currentRecognizer.decode()
+                                }
+
+                                val isEndpoint = currentRecognizer.isEndpoint()
+                                val text = currentRecognizer.text
+
+                                if (text.isNotBlank() && lastText != text) {
+                                    lastText = text
+                                    withContext(Dispatchers.Main) {
+                                        if (isEndpoint) {
+                                            listener.onResult(text)
+                                        } else {
+                                            listener.onPartialResult(text)
+                                        }
+                                    }
+                                }
+
+                                if (isEndpoint) {
+                                    currentRecognizer.reset(false)
+                                    isListening = false
+                                    if (finalResultEmitted.compareAndSet(false, true)) {
+                                        withContext(Dispatchers.Main) {
+                                            listener.onFinalResult(lastText)
+                                        }
+                                    }
+                                    break
                                 }
                             }
-                            break
                         }
+
+                        Log.d(TAG, "Recording loop ended.")
+                    } finally {
+                        releaseAudioRecord()
                     }
                 }
-
-                Log.d(TAG, "Recording loop ended.")
-            } finally {
-                releaseAudioRecord()
-            }
-        }
     }
 
-    /**
-     * 停止语音识别
-     */
+    /** 停止语音识别 */
     fun stopListening() {
         if (!isListening) return
 
@@ -402,9 +417,7 @@ class SherpaSpeechRecognizer(private val context: Context) {
         releaseAudioRecord()
     }
 
-    /**
-     * 取消语音识别（不返回结果）
-     */
+    /** 取消语音识别（不返回结果） */
     fun cancel() {
         isListening = false
         recordingJob?.cancel()
@@ -412,9 +425,7 @@ class SherpaSpeechRecognizer(private val context: Context) {
         releaseAudioRecord()
     }
 
-    /**
-     * 释放资源
-     */
+    /** 释放资源 */
     fun shutdown() {
         cancel()
         scope.cancel()

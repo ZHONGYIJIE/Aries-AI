@@ -2,13 +2,14 @@ package com.ai.phoneagent.vdiso
 
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.SurfaceTexture
 import android.media.Image
 import android.media.ImageReader
 import android.opengl.EGL14
-import android.opengl.EGLExt
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
 import android.opengl.EGLDisplay
+import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
@@ -16,7 +17,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
-import android.graphics.SurfaceTexture
 import android.util.Log
 import android.view.Surface
 
@@ -25,8 +25,8 @@ import android.view.Surface
  *
  * **用途**
  * - 将 VirtualDisplay 的输出绑定到内部 `SurfaceTexture`（OES 外部纹理），在 GL 线程中进行两路分发：
- *   - 预览输出：渲染到可选的 `previewSurface`（悬浮窗 TextureView/SurfaceView）。
- *   - 截图输出：渲染到离屏 `ImageReader`（captureSurface），供上层读取最新帧并转为 Bitmap/base64。
+ * - 预览输出：渲染到可选的 `previewSurface`（悬浮窗 TextureView/SurfaceView）。
+ * - 截图输出：渲染到离屏 `ImageReader`（captureSurface），供上层读取最新帧并转为 Bitmap/base64。
  * - 目标：实现"预览与截图互不干扰"，同时减少频繁的 bitmap 拷贝开销。
  *
  * **引用路径（常见）**
@@ -41,62 +41,43 @@ class VdGlFrameDispatcher {
     private var width: Int = 0
     private var height: Int = 0
 
-    @Volatile
-    private var inputSurfaceTexture: SurfaceTexture? = null
+    @Volatile private var inputSurfaceTexture: SurfaceTexture? = null
 
-    @Volatile
-    private var inputSurface: Surface? = null
+    @Volatile private var inputSurface: Surface? = null
 
-    @Volatile
-    private var imageReader: ImageReader? = null
+    @Volatile private var imageReader: ImageReader? = null
 
-    @Volatile
-    private var previewSurface: Surface? = null
+    @Volatile private var previewSurface: Surface? = null
 
-    @Volatile
-    private var glThread: HandlerThread? = null
+    @Volatile private var glThread: HandlerThread? = null
 
-    @Volatile
-    private var glHandler: Handler? = null
+    @Volatile private var glHandler: Handler? = null
 
-    @Volatile
-    private var eglDisplay: EGLDisplay? = null
+    @Volatile private var eglDisplay: EGLDisplay? = null
 
-    @Volatile
-    private var eglContext: EGLContext? = null
+    @Volatile private var eglContext: EGLContext? = null
 
-    @Volatile
-    private var eglConfig: EGLConfig? = null
+    @Volatile private var eglConfig: EGLConfig? = null
 
-    @Volatile
-    private var eglPreviewSurface: EGLSurface? = null
+    @Volatile private var eglPreviewSurface: EGLSurface? = null
 
-    @Volatile
-    private var eglCaptureSurface: EGLSurface? = null
+    @Volatile private var eglCaptureSurface: EGLSurface? = null
 
-    @Volatile
-    private var eglPbufferSurface: EGLSurface? = null
+    @Volatile private var eglPbufferSurface: EGLSurface? = null
 
-    @Volatile
-    private var program: Int = 0
+    @Volatile private var program: Int = 0
 
-    @Volatile
-    private var aPos: Int = -1
+    @Volatile private var aPos: Int = -1
 
-    @Volatile
-    private var aTex: Int = -1
+    @Volatile private var aTex: Int = -1
 
-    @Volatile
-    private var uTex: Int = -1
+    @Volatile private var uTex: Int = -1
 
-    @Volatile
-    private var uSTMatrix: Int = -1
+    @Volatile private var uSTMatrix: Int = -1
 
-    @Volatile
-    private var oesTexId: Int = 0
+    @Volatile private var oesTexId: Int = 0
 
-    @Volatile
-    private var lastFrameTimeMs: Long = 0L
+    @Volatile private var lastFrameTimeMs: Long = 0L
 
     private val frameSync = Object()
     private var frameAvailable: Boolean = false
@@ -104,9 +85,8 @@ class VdGlFrameDispatcher {
     private val renderSync = Object()
     private var previewRenderPosted: Boolean = false
 
-    @Volatile
-    private var initError: Throwable? = null
-    
+    @Volatile private var initError: Throwable? = null
+
     fun start(targetWidth: Int, targetHeight: Int) {
         stop()
 
@@ -127,7 +107,7 @@ class VdGlFrameDispatcher {
                 Log.e("AriesVdGl", "initGlOnThread failed", t)
             }
         }
-        
+
         // 等待初始化完成或超时
         val deadline = SystemClock.uptimeMillis() + 2000L
         while (SystemClock.uptimeMillis() < deadline) {
@@ -149,9 +129,7 @@ class VdGlFrameDispatcher {
         glThread = null
 
         if (h != null) {
-            h.post {
-                releaseGlOnThread()
-            }
+            h.post { releaseGlOnThread() }
         }
 
         runCatching { t?.quitSafely() }
@@ -180,9 +158,7 @@ class VdGlFrameDispatcher {
 
     fun setPreviewSurface(surface: Surface?) {
         val h = glHandler ?: return
-        h.post {
-            setPreviewSurfaceOnThread(surface)
-        }
+        h.post { setPreviewSurfaceOnThread(surface) }
     }
 
     fun captureBitmapBlocking(timeoutMs: Long = 800L): Bitmap? {
@@ -212,15 +188,22 @@ class VdGlFrameDispatcher {
             throw IllegalStateException("eglInitialize failed")
         }
 
-        val attribList = intArrayOf(
-            EGL14.EGL_RED_SIZE, 8,
-            EGL14.EGL_GREEN_SIZE, 8,
-            EGL14.EGL_BLUE_SIZE, 8,
-            EGL14.EGL_ALPHA_SIZE, 8,
-            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-            EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT or EGL14.EGL_PBUFFER_BIT,
-            EGL14.EGL_NONE,
-        )
+        val attribList =
+                intArrayOf(
+                        EGL14.EGL_RED_SIZE,
+                        8,
+                        EGL14.EGL_GREEN_SIZE,
+                        8,
+                        EGL14.EGL_BLUE_SIZE,
+                        8,
+                        EGL14.EGL_ALPHA_SIZE,
+                        8,
+                        EGL14.EGL_RENDERABLE_TYPE,
+                        EGL14.EGL_OPENGL_ES2_BIT,
+                        EGL14.EGL_SURFACE_TYPE,
+                        EGL14.EGL_WINDOW_BIT or EGL14.EGL_PBUFFER_BIT,
+                        EGL14.EGL_NONE,
+                )
 
         val configs = arrayOfNulls<EGLConfig>(1)
         val num = IntArray(1)
@@ -233,15 +216,19 @@ class VdGlFrameDispatcher {
         val ctxAttrib = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
         val ctx = EGL14.eglCreateContext(d, cfg, EGL14.EGL_NO_CONTEXT, ctxAttrib, 0)
         eglContext = ctx
-        if (ctx == null || ctx == EGL14.EGL_NO_CONTEXT) throw IllegalStateException("eglCreateContext failed")
+        if (ctx == null || ctx == EGL14.EGL_NO_CONTEXT)
+                throw IllegalStateException("eglCreateContext failed")
 
         // Before any GLES* call, we must have a current EGL context.
         // Create a tiny Pbuffer surface and make it current.
-        val pbufferAttrib = intArrayOf(
-            EGL14.EGL_WIDTH, 1,
-            EGL14.EGL_HEIGHT, 1,
-            EGL14.EGL_NONE,
-        )
+        val pbufferAttrib =
+                intArrayOf(
+                        EGL14.EGL_WIDTH,
+                        1,
+                        EGL14.EGL_HEIGHT,
+                        1,
+                        EGL14.EGL_NONE,
+                )
         val pb = EGL14.eglCreatePbufferSurface(d, cfg, pbufferAttrib, 0)
         if (pb == null || pb == EGL14.EGL_NO_SURFACE) {
             throw IllegalStateException("eglCreatePbufferSurface failed")
@@ -255,40 +242,58 @@ class VdGlFrameDispatcher {
         GLES20.glGenTextures(1, tex, 0)
         oesTexId = tex[0]
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(
+                GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                GLES20.GL_TEXTURE_MIN_FILTER,
+                GLES20.GL_LINEAR
+        )
+        GLES20.glTexParameteri(
+                GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                GLES20.GL_TEXTURE_MAG_FILTER,
+                GLES20.GL_LINEAR
+        )
+        GLES20.glTexParameteri(
+                GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                GLES20.GL_TEXTURE_WRAP_S,
+                GLES20.GL_CLAMP_TO_EDGE
+        )
+        GLES20.glTexParameteri(
+                GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                GLES20.GL_TEXTURE_WRAP_T,
+                GLES20.GL_CLAMP_TO_EDGE
+        )
 
         val st = SurfaceTexture(oesTexId)
         st.setDefaultBufferSize(width, height)
         val callbackHandler = glHandler ?: Handler(Looper.myLooper() ?: Looper.getMainLooper())
-        st.setOnFrameAvailableListener({ _: SurfaceTexture ->
-            synchronized(frameSync) {
-                frameAvailable = true
-                frameSync.notifyAll()
-            }
+        st.setOnFrameAvailableListener(
+                { _: SurfaceTexture ->
+                    synchronized(frameSync) {
+                        frameAvailable = true
+                        frameSync.notifyAll()
+                    }
 
-            // Never render directly inside the callback: it may arrive on a non-GL thread and can be re-entrant.
-            // Post at most one pending preview render to GL thread.
-            val h = glHandler ?: return@setOnFrameAvailableListener
-            synchronized(renderSync) {
-                if (previewRenderPosted) return@setOnFrameAvailableListener
-                previewRenderPosted = true
-            }
-            h.post {
-                try {
-                    val ps = eglPreviewSurface
-                    if (ps != null) {
-                        renderLatestToSurface(ps, width, height)
-                    }
-                } finally {
+                    // Never render directly inside the callback: it may arrive on a non-GL thread
+                    // and can be re-entrant.
+                    // Post at most one pending preview render to GL thread.
+                    val h = glHandler ?: return@setOnFrameAvailableListener
                     synchronized(renderSync) {
-                        previewRenderPosted = false
+                        if (previewRenderPosted) return@setOnFrameAvailableListener
+                        previewRenderPosted = true
                     }
-                }
-            }
-        }, callbackHandler)
+                    h.post {
+                        try {
+                            val ps = eglPreviewSurface
+                            if (ps != null) {
+                                renderLatestToSurface(ps, width, height)
+                            }
+                        } finally {
+                            synchronized(renderSync) { previewRenderPosted = false }
+                        }
+                    }
+                },
+                callbackHandler
+        )
 
         inputSurfaceTexture = st
         inputSurface = Surface(st)
@@ -353,7 +358,14 @@ class VdGlFrameDispatcher {
         eglConfig = null
 
         if (d != null) {
-            runCatching { EGL14.eglMakeCurrent(d, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT) }
+            runCatching {
+                EGL14.eglMakeCurrent(
+                        d,
+                        EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_SURFACE,
+                        EGL14.EGL_NO_CONTEXT
+                )
+            }
             if (c != null && c != EGL14.EGL_NO_CONTEXT) {
                 runCatching { EGL14.eglDestroyContext(d, c) }
             }
@@ -435,8 +447,10 @@ class VdGlFrameDispatcher {
         runCatching { st.updateTexImage() }
         lastFrameTimeMs = SystemClock.uptimeMillis()
 
-        // Query real EGL surface size (TextureView window surface may not be 1:1 with virtual content size).
-        // We always render full-surface (no letterbox): UI side must enforce the correct aspect ratio.
+        // Query real EGL surface size (TextureView window surface may not be 1:1 with virtual
+        // content size).
+        // We always render full-surface (no letterbox): UI side must enforce the correct aspect
+        // ratio.
         val surfaceW = queryEglSurfaceInt(d, eglSurface, EGL14.EGL_WIDTH).takeIf { it > 0 } ?: outW
         val surfaceH = queryEglSurfaceInt(d, eglSurface, EGL14.EGL_HEIGHT).takeIf { it > 0 } ?: outH
 
@@ -445,29 +459,41 @@ class VdGlFrameDispatcher {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(program)
 
-        val vertices = floatArrayOf(
-            -1f, -1f,
-            1f, -1f,
-            -1f, 1f,
-            1f, 1f,
-        )
+        val vertices =
+                floatArrayOf(
+                        -1f,
+                        -1f,
+                        1f,
+                        -1f,
+                        -1f,
+                        1f,
+                        1f,
+                        1f,
+                )
         // Base texture coords in normal (not manually flipped) orientation.
         // SurfaceTexture's transform matrix will handle the actual sampling region + orientation.
-        val tex = floatArrayOf(
-            0f, 0f,
-            1f, 0f,
-            0f, 1f,
-            1f, 1f,
-        )
+        val tex =
+                floatArrayOf(
+                        0f,
+                        0f,
+                        1f,
+                        0f,
+                        0f,
+                        1f,
+                        1f,
+                        1f,
+                )
 
-        val vb = java.nio.ByteBuffer.allocateDirect(vertices.size * 4)
-            .order(java.nio.ByteOrder.nativeOrder())
-            .asFloatBuffer()
+        val vb =
+                java.nio.ByteBuffer.allocateDirect(vertices.size * 4)
+                        .order(java.nio.ByteOrder.nativeOrder())
+                        .asFloatBuffer()
         vb.put(vertices).position(0)
 
-        val tb = java.nio.ByteBuffer.allocateDirect(tex.size * 4)
-            .order(java.nio.ByteOrder.nativeOrder())
-            .asFloatBuffer()
+        val tb =
+                java.nio.ByteBuffer.allocateDirect(tex.size * 4)
+                        .order(java.nio.ByteOrder.nativeOrder())
+                        .asFloatBuffer()
         tb.put(tex).position(0)
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -549,7 +575,8 @@ class VdGlFrameDispatcher {
     }
 
     companion object {
-        private const val VS = """attribute vec4 aPos;
+        private const val VS =
+                """attribute vec4 aPos;
 attribute vec2 aTex;
 varying vec2 vTex;
 void main() {
@@ -558,7 +585,8 @@ void main() {
 }
 """
 
-        private const val FS = """#extension GL_OES_EGL_image_external : require
+        private const val FS =
+                """#extension GL_OES_EGL_image_external : require
 precision mediump float;
 varying vec2 vTex;
 uniform samplerExternalOES uTex;

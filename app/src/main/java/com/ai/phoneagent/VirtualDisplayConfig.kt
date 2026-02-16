@@ -29,7 +29,7 @@ object VirtualDisplayConfig {
     const val RES_1080P = "1080P"
 
     val RESOLUTION_PRESETS = setOf(RES_480P, RES_720P, RES_1080P)
-    const val DEFAULT_RESOLUTION = RES_1080P      // 用户选择：默认1080P
+    const val DEFAULT_RESOLUTION = RES_1080P // 用户选择：默认1080P
 
     // ─── DPI ───
     const val DEFAULT_DPI = 480
@@ -47,10 +47,7 @@ object VirtualDisplayConfig {
     //  16 像素对齐
     // ════════════════════════════════════════════
 
-    /**
-     * 将尺寸对齐到最近的 16 倍数（最小16）。
-     * 原因：GPU / MediaCodec 编码器通常要求 16 对齐，否则可能出现黑边、显存浪费或崩溃。
-     */
+    /** 将尺寸对齐到最近的 16 倍数（最小16）。 原因：GPU / MediaCodec 编码器通常要求 16 对齐，否则可能出现黑边、显存浪费或崩溃。 */
     fun align16(value: Int): Int {
         val v = value.coerceAtLeast(1)
         val down = (v / 16) * 16
@@ -66,13 +63,13 @@ object VirtualDisplayConfig {
      * 将预设字符串转换为 (宽, 高)，已 16 像素对齐。
      * - 480P → 480 × 848
      * - 720P → 720 × 1280
-     * - 1080P → 1088 × 1920  （1080 对齐后 = 1088）
+     * - 1080P → 1088 × 1920 （1080 对齐后 = 1088）
      */
     fun presetToSize(preset: String): Pair<Int, Int> {
         return when (preset) {
-            RES_720P  -> align16(720) to align16(1280)
+            RES_720P -> align16(720) to align16(1280)
             RES_1080P -> align16(1088) to align16(1920)
-            else      -> align16(480) to align16(848)
+            else -> align16(480) to align16(848)
         }
     }
 
@@ -81,33 +78,34 @@ object VirtualDisplayConfig {
     // ════════════════════════════════════════════
 
     private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /** 获取当前分辨率预设 */
     fun getResolutionPreset(context: Context): String {
-        return prefs(context).getString(KEY_RESOLUTION_PRESET, DEFAULT_RESOLUTION)
-            .orEmpty()
-            .ifEmpty { DEFAULT_RESOLUTION }
-            .takeIf { it in RESOLUTION_PRESETS }
-            ?: DEFAULT_RESOLUTION
+        return prefs(context)
+                .getString(KEY_RESOLUTION_PRESET, DEFAULT_RESOLUTION)
+                .orEmpty()
+                .ifEmpty { DEFAULT_RESOLUTION }
+                .takeIf { it in RESOLUTION_PRESETS }
+                ?: DEFAULT_RESOLUTION
     }
 
     /** 设置分辨率预设（同时更新宽高缓存） */
     fun setResolutionPreset(context: Context, preset: String) {
         val safe = preset.takeIf { it in RESOLUTION_PRESETS } ?: DEFAULT_RESOLUTION
         val (w, h) = presetToSize(safe)
-        prefs(context).edit()
-            .putString(KEY_RESOLUTION_PRESET, safe)
-            .putInt(KEY_WIDTH, w)
-            .putInt(KEY_HEIGHT, h)
-            .apply()
+        prefs(context)
+                .edit()
+                .putString(KEY_RESOLUTION_PRESET, safe)
+                .putInt(KEY_WIDTH, w)
+                .putInt(KEY_HEIGHT, h)
+                .apply()
     }
 
     /** 获取 DPI（带范围校验） */
     fun getDpi(context: Context): Int {
-        return prefs(context).getInt(KEY_DPI, DEFAULT_DPI)
-            .takeIf { it in DPI_MIN..DPI_MAX }
-            ?: DEFAULT_DPI
+        return prefs(context).getInt(KEY_DPI, DEFAULT_DPI).takeIf { it in DPI_MIN..DPI_MAX }
+                ?: DEFAULT_DPI
     }
 
     /** 设置 DPI（带范围校验） */
@@ -116,10 +114,7 @@ object VirtualDisplayConfig {
         prefs(context).edit().putInt(KEY_DPI, safe).apply()
     }
 
-    /**
-     * 获取虚拟屏宽高（已 16 对齐）。
-     * 如果 SP 中有缓存值且合法，直接返回；否则从预设计算。
-     */
+    /** 获取虚拟屏宽高（已 16 对齐）。 如果 SP 中有缓存值且合法，直接返回；否则从预设计算。 */
     fun getSize(context: Context): Pair<Int, Int> {
         val p = prefs(context)
         val cachedW = p.getInt(KEY_WIDTH, 0)

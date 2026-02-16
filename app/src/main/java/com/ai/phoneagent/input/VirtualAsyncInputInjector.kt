@@ -2,13 +2,13 @@ package com.ai.phoneagent.input
 
 import android.os.IBinder
 import android.os.SystemClock
+import android.util.Log
 import android.view.InputDevice
 import android.view.InputEvent
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.MotionEvent.PointerCoords
 import android.view.MotionEvent.PointerProperties
-import android.util.Log
 import java.lang.reflect.Method
 import rikka.shizuku.ShizukuBinderWrapper
 
@@ -17,15 +17,15 @@ import rikka.shizuku.ShizukuBinderWrapper
  *
  * **用途**
  * - 通过 Shizuku 获取 `IInputManager` 并反射调用 `injectInputEvent`，用于向指定 display 注入：
- *   - 单点触摸（down/move/up）
- *   - 按键（back/home 等）
+ * - 单点触摸（down/move/up）
+ * - 按键（back/home 等）
  * - 自动适配不同 Android/ROM 上 `injectInputEvent` 的方法签名：
- *   - `injectInputEvent(InputEvent, int mode)`
- *   - `injectInputEvent(InputEvent, int displayId, int mode)`
+ * - `injectInputEvent(InputEvent, int mode)`
+ * - `injectInputEvent(InputEvent, int displayId, int mode)`
  *
  * **典型用法**
- * - 上层通常通过 [com.ai.phoneagent.VirtualDisplayController] 暴露的静态方法调用，
- *   例如 `injectTapBestEffort(displayId, x, y)`。
+ * - 上层通常通过 [com.ai.phoneagent.VirtualDisplayController] 暴露的静态方法调用， 例如
+ * `injectTapBestEffort(displayId, x, y)`。
  *
  * **使用注意事项**
  * - 该类为 best-effort：所有注入均不等待结果，失败会被吞掉以避免影响主流程。
@@ -34,21 +34,17 @@ import rikka.shizuku.ShizukuBinderWrapper
 internal class VirtualAsyncInputInjector {
 
     private class InputManagerAccess(
-        val iInputManager: Any,
-        val injectInputEvent: Method,
+            val iInputManager: Any,
+            val injectInputEvent: Method,
     )
 
-    @Volatile
-    private var cached: InputManagerAccess? = null
+    @Volatile private var cached: InputManagerAccess? = null
 
-    @Volatile
-    private var setDisplayIdMethod: Method? = null
+    @Volatile private var setDisplayIdMethod: Method? = null
 
-    @Volatile
-    private var loggedChosenInjectMethod: Boolean = false
+    @Volatile private var loggedChosenInjectMethod: Boolean = false
 
-    @Volatile
-    private var loggedAllInjectCandidates: Boolean = false
+    @Volatile private var loggedAllInjectCandidates: Boolean = false
 
     private val touchPointerPropertiesTL = ThreadLocal<Array<PointerProperties>>()
     private val touchPointerCoordsTL = ThreadLocal<Array<PointerCoords>>()
@@ -57,7 +53,7 @@ internal class VirtualAsyncInputInjector {
         val sm = Class.forName("android.os.ServiceManager")
         val m = sm.getMethod("getService", String::class.java)
         return (m.invoke(null, name) as? IBinder)
-            ?: throw IllegalStateException("Service not found: $name")
+                ?: throw IllegalStateException("Service not found: $name")
     }
 
     private fun getIInputManager(): InputManagerAccess {
@@ -68,26 +64,31 @@ internal class VirtualAsyncInputInjector {
         val binder = ShizukuBinderWrapper(getRawService("input"))
         val stub = Class.forName("android.hardware.input.IInputManager\$Stub")
         val asInterface = stub.getMethod("asInterface", IBinder::class.java)
-        val iim = asInterface.invoke(null, binder)
-            ?: throw IllegalStateException("IInputManager.asInterface returned null")
+        val iim =
+                asInterface.invoke(null, binder)
+                        ?: throw IllegalStateException("IInputManager.asInterface returned null")
 
-        val candidates = iim.javaClass.methods
-            .asSequence()
-            .filter { m -> m.name == "injectInputEvent" }
-            .filter { m -> m.returnType == Boolean::class.javaPrimitiveType }
-            .filter { m ->
-                val p = m.parameterTypes
-                if (p.isEmpty()) return@filter false
-                // First parameter must be InputEvent (or a subclass). Reject Object.
-                if (!InputEvent::class.java.isAssignableFrom(p[0])) return@filter false
-                // Remaining parameters must be primitive int
-                when (p.size) {
-                    2 -> p[1] == Int::class.javaPrimitiveType
-                    3 -> p[1] == Int::class.javaPrimitiveType && p[2] == Int::class.javaPrimitiveType
-                    else -> false
-                }
-            }
-            .toList()
+        val candidates =
+                iim.javaClass
+                        .methods
+                        .asSequence()
+                        .filter { m -> m.name == "injectInputEvent" }
+                        .filter { m -> m.returnType == Boolean::class.javaPrimitiveType }
+                        .filter { m ->
+                            val p = m.parameterTypes
+                            if (p.isEmpty()) return@filter false
+                            // First parameter must be InputEvent (or a subclass). Reject Object.
+                            if (!InputEvent::class.java.isAssignableFrom(p[0])) return@filter false
+                            // Remaining parameters must be primitive int
+                            when (p.size) {
+                                2 -> p[1] == Int::class.javaPrimitiveType
+                                3 ->
+                                        p[1] == Int::class.javaPrimitiveType &&
+                                                p[2] == Int::class.javaPrimitiveType
+                                else -> false
+                            }
+                        }
+                        .toList()
 
         if (!loggedAllInjectCandidates) {
             loggedAllInjectCandidates = true
@@ -98,9 +99,12 @@ internal class VirtualAsyncInputInjector {
         }
 
         // Prefer 2-arg overload (InputEvent, mode). OEM ROMs may repurpose 3-arg overload.
-        val inject = candidates.firstOrNull { it.parameterTypes.size == 2 }
-            ?: candidates.firstOrNull { it.parameterTypes.size == 3 }
-            ?: throw NoSuchMethodException("IInputManager.injectInputEvent(InputEvent,int[,int])")
+        val inject =
+                candidates.firstOrNull { it.parameterTypes.size == 2 }
+                        ?: candidates.firstOrNull { it.parameterTypes.size == 3 }
+                                ?: throw NoSuchMethodException(
+                                "IInputManager.injectInputEvent(InputEvent,int[,int])"
+                        )
 
         if (!loggedChosenInjectMethod) {
             loggedChosenInjectMethod = true
@@ -112,9 +116,12 @@ internal class VirtualAsyncInputInjector {
 
     private fun ensureSetDisplayIdMethod() {
         if (setDisplayIdMethod != null) return
-        setDisplayIdMethod = InputEvent::class.java.methods.firstOrNull { m ->
-            m.name == "setDisplayId" && m.parameterTypes.size == 1 && m.parameterTypes[0] == Int::class.javaPrimitiveType
-        }
+        setDisplayIdMethod =
+                InputEvent::class.java.methods.firstOrNull { m ->
+                    m.name == "setDisplayId" &&
+                            m.parameterTypes.size == 1 &&
+                            m.parameterTypes[0] == Int::class.javaPrimitiveType
+                }
     }
 
     private fun applyDisplayIdBestEffort(ev: InputEvent, displayId: Int) {
@@ -148,21 +155,41 @@ internal class VirtualAsyncInputInjector {
         injectInputEventAsync(access, displayId, ev)
     }
 
-    /**
-     * 注入带修饰键的组合键（如 Ctrl+V）
-     */
+    /** 注入带修饰键的组合键（如 Ctrl+V） */
     fun injectKeyComboAsync(displayId: Int, keyCode: Int, metaState: Int) {
         val access = getIInputManager()
 
         val now = SystemClock.uptimeMillis()
-        val downEv = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, metaState,
-            -1, 0, 0, InputDevice.SOURCE_KEYBOARD)
+        val downEv =
+                KeyEvent(
+                        now,
+                        now,
+                        KeyEvent.ACTION_DOWN,
+                        keyCode,
+                        0,
+                        metaState,
+                        -1,
+                        0,
+                        0,
+                        InputDevice.SOURCE_KEYBOARD
+                )
         applyDisplayIdBestEffort(downEv, displayId)
         injectInputEventAsync(access, displayId, downEv)
 
         val upTime = SystemClock.uptimeMillis()
-        val upEv = KeyEvent(now, upTime, KeyEvent.ACTION_UP, keyCode, 0, metaState,
-            -1, 0, 0, InputDevice.SOURCE_KEYBOARD)
+        val upEv =
+                KeyEvent(
+                        now,
+                        upTime,
+                        KeyEvent.ACTION_UP,
+                        keyCode,
+                        0,
+                        metaState,
+                        -1,
+                        0,
+                        0,
+                        InputDevice.SOURCE_KEYBOARD
+                )
         applyDisplayIdBestEffort(upEv, displayId)
         injectInputEventAsync(access, displayId, upEv)
     }
@@ -171,39 +198,46 @@ internal class VirtualAsyncInputInjector {
         val access = getIInputManager()
 
         val now = SystemClock.uptimeMillis()
-        val props = touchPointerPropertiesTL.get() ?: arrayOf(
-            PointerProperties().apply {
-                id = 0
-                toolType = MotionEvent.TOOL_TYPE_FINGER
-            }
-        ).also { touchPointerPropertiesTL.set(it) }
+        val props =
+                touchPointerPropertiesTL.get()
+                        ?: arrayOf(
+                                        PointerProperties().apply {
+                                            id = 0
+                                            toolType = MotionEvent.TOOL_TYPE_FINGER
+                                        }
+                                )
+                                .also { touchPointerPropertiesTL.set(it) }
 
-        val coords = touchPointerCoordsTL.get() ?: arrayOf(
-            PointerCoords().apply {
-                pressure = 1f
-                size = 1f
-            }
-        ).also { touchPointerCoordsTL.set(it) }
+        val coords =
+                touchPointerCoordsTL.get()
+                        ?: arrayOf(
+                                        PointerCoords().apply {
+                                            pressure = 1f
+                                            size = 1f
+                                        }
+                                )
+                                .also { touchPointerCoordsTL.set(it) }
 
         coords[0].x = x
         coords[0].y = y
 
-        val ev = MotionEvent.obtain(
-            downTime,
-            now,
-            action,
-            1,
-            props,
-            coords,
-            0,
-            0,
-            1f,
-            1f,
-            0,
-            0,
-            InputDevice.SOURCE_TOUCHSCREEN,
-            0,
-        )
+        val ev =
+                MotionEvent.obtain(
+                        downTime,
+                        now,
+                        action,
+                        1,
+                        props,
+                        coords,
+                        0,
+                        0,
+                        1f,
+                        1f,
+                        0,
+                        0,
+                        InputDevice.SOURCE_TOUCHSCREEN,
+                        0,
+                )
         applyDisplayIdBestEffort(ev, displayId)
 
         injectInputEventAsync(access, displayId, ev)

@@ -33,52 +33,75 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.ai.phoneagent.ui.UIAutomationProgressOverlay
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
-import org.json.JSONArray
-import org.json.JSONObject
 import kotlin.coroutines.resume
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.json.JSONArray
+import org.json.JSONObject
 
 class PhoneAgentAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG_KEYEVENT = "VdKeyEventFilter"
-        
+
         @Volatile var instance: PhoneAgentAccessibilityService? = null
-        
+
         // 截图压缩配置
-        private const val SCREENSHOT_QUALITY = 85  // JPEG质量 (0-100)
-        private const val SCREENSHOT_SCALE_PERCENT = 75  // 缩放百分比 (50-100)
-        private const val USE_JPEG_COMPRESSION = true  // 是否使用JPEG压缩
-        
-        /**
-         * 文本规范化：去除空白、繁简转换
-         */
+        private const val SCREENSHOT_QUALITY = 85 // JPEG质量 (0-100)
+        private const val SCREENSHOT_SCALE_PERCENT = 75 // 缩放百分比 (50-100)
+        private const val USE_JPEG_COMPRESSION = true // 是否使用JPEG压缩
+
+        /** 文本规范化：去除空白、繁简转换 */
         private fun normalizeText(text: String): String {
             return text.trim()
-                .replace(Regex("\\s+"), "")  // 移除所有空白字符
-                .toSimplifiedChinese()  // 繁体转简体
-                .lowercase()  // 转小写
+                    .replace(Regex("\\s+"), "") // 移除所有空白字符
+                    .toSimplifiedChinese() // 繁体转简体
+                    .lowercase() // 转小写
         }
-        
-        /**
-         * 繁体中文转简体，覆盖常见字符
-         */
+
+        /** 繁体中文转简体，覆盖常见字符 */
         private fun String.toSimplifiedChinese(): String {
-            val traditionalToSimplified = mapOf(
-                // 常见繁体字
-                '錄' to '录', '應' to '应', '開' to '开', '關' to '关', '設' to '设',
-                '節' to '节', '點' to '点', '選' to '选', '瀋' to '览', '頁' to '页',
-                '鯒' to '龙', '青' to '香', '臺' to '台', '灣' to '湾', '國' to '国',
-                '獨' to '小', '學' to '学', '會' to '会', '還' to '还', '當' to '当',
-                '線' to '线', '購' to '购', '請' to '请', '讓' to '让', '說' to '说',
-                '閱' to '阅', '文' to '件', '事' to '件', '工' to '作', '資' to '资',
-                '訊' to '讯', '已' to '已', '未' to '未', '更' to '更', '呼' to '呼'
-            )
+            val traditionalToSimplified =
+                    mapOf(
+                            // 常见繁体字
+                            '錄' to '录',
+                            '應' to '应',
+                            '開' to '开',
+                            '關' to '关',
+                            '設' to '设',
+                            '節' to '节',
+                            '點' to '点',
+                            '選' to '选',
+                            '瀋' to '览',
+                            '頁' to '页',
+                            '鯒' to '龙',
+                            '青' to '香',
+                            '臺' to '台',
+                            '灣' to '湾',
+                            '國' to '国',
+                            '獨' to '小',
+                            '學' to '学',
+                            '會' to '会',
+                            '還' to '还',
+                            '當' to '当',
+                            '線' to '线',
+                            '購' to '购',
+                            '請' to '请',
+                            '讓' to '让',
+                            '說' to '说',
+                            '閱' to '阅',
+                            '文' to '件',
+                            '事' to '件',
+                            '工' to '作',
+                            '資' to '资',
+                            '訊' to '讯',
+                            '已' to '已',
+                            '未' to '未',
+                            '更' to '更',
+                            '呼' to '呼'
+                    )
             var result = this
-            traditionalToSimplified.forEach { (trad, simp) ->
-                result = result.replace(trad, simp)
-            }
+            traditionalToSimplified.forEach { (trad, simp) -> result = result.replace(trad, simp) }
             return result
         }
     }
@@ -88,9 +111,13 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     @Volatile private var lastEventTimeMs: Long = 0L
     @Volatile private var lastWindowEventTimeMs: Long = 0L
 
-        private enum class UiDetailLevel { MINIMAL, SUMMARY, FULL }
+    private enum class UiDetailLevel {
+        MINIMAL,
+        SUMMARY,
+        FULL
+    }
 
-        private data class UiNodeSnapshot(
+    private data class UiNodeSnapshot(
             val nodeId: String,
             val className: String,
             val packageName: String,
@@ -108,7 +135,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
             val longClickable: Boolean,
             val editable: Boolean,
             val children: List<UiNodeSnapshot>,
-        )
+    )
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -141,8 +168,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
      * - 用户的物理按键/手势自然只作用于主屏
      * - 虚拟屏的返回/Home 由程序通过 displayId 定向注入
      *
-     * 此处仅作为最后防线：如果系统因某种原因将焦点切到了虚拟屏，
-     * 拦截返回键并立即恢复焦点到主屏，防止意外操作虚拟屏。
+     * 此处仅作为最后防线：如果系统因某种原因将焦点切到了虚拟屏， 拦截返回键并立即恢复焦点到主屏，防止意外操作虚拟屏。
      */
     override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
         if (event == null) return false
@@ -150,8 +176,9 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
 
         val keyCode = event.keyCode
         if (keyCode != android.view.KeyEvent.KEYCODE_BACK &&
-            keyCode != android.view.KeyEvent.KEYCODE_HOME &&
-            keyCode != 187) {
+                        keyCode != android.view.KeyEvent.KEYCODE_HOME &&
+                        keyCode != 187
+        ) {
             return false
         }
 
@@ -188,11 +215,11 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     }
 
     suspend fun performSwipe(
-        startX: Float,
-        startY: Float,
-        endX: Float,
-        endY: Float,
-        durationMs: Long = 300L,
+            startX: Float,
+            startY: Float,
+            endX: Float,
+            endY: Float,
+            durationMs: Long = 300L,
     ): Boolean {
         return swipeAwait(startX, startY, endX, endY, durationMs)
     }
@@ -238,41 +265,65 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
 
                                         val originalBmp = hw.copy(Bitmap.Config.ARGB_8888, false)
                                         hw.recycle()
-                                        
+
                                         val originalWidth = originalBmp.width
                                         val originalHeight = originalBmp.height
-                                        
+
                                         // 按比例缩放截图以减少大小
                                         val scaleFactor = SCREENSHOT_SCALE_PERCENT / 100.0
-                                        val bmpForCompress = if (scaleFactor < 1.0) {
-                                            val newWidth = (originalWidth * scaleFactor).toInt().coerceAtLeast(1)
-                                            val newHeight = (originalHeight * scaleFactor).toInt().coerceAtLeast(1)
-                                            val scaled = Bitmap.createScaledBitmap(originalBmp, newWidth, newHeight, true)
-                                            originalBmp.recycle()
-                                            scaled
-                                        } else {
-                                            originalBmp
-                                        }
-                                        
+                                        val bmpForCompress =
+                                                if (scaleFactor < 1.0) {
+                                                    val newWidth =
+                                                            (originalWidth * scaleFactor)
+                                                                    .toInt()
+                                                                    .coerceAtLeast(1)
+                                                    val newHeight =
+                                                            (originalHeight * scaleFactor)
+                                                                    .toInt()
+                                                                    .coerceAtLeast(1)
+                                                    val scaled =
+                                                            Bitmap.createScaledBitmap(
+                                                                    originalBmp,
+                                                                    newWidth,
+                                                                    newHeight,
+                                                                    true
+                                                            )
+                                                    originalBmp.recycle()
+                                                    scaled
+                                                } else {
+                                                    originalBmp
+                                                }
+
                                         val out = ByteArrayOutputStream()
                                         // 使用JPEG压缩以大幅减少文件大小
                                         if (USE_JPEG_COMPRESSION) {
-                                            bmpForCompress.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_QUALITY, out)
+                                            bmpForCompress.compress(
+                                                    Bitmap.CompressFormat.JPEG,
+                                                    SCREENSHOT_QUALITY,
+                                                    out
+                                            )
                                         } else {
-                                            bmpForCompress.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                            bmpForCompress.compress(
+                                                    Bitmap.CompressFormat.PNG,
+                                                    100,
+                                                    out
+                                            )
                                         }
                                         val bytes = out.toByteArray()
                                         val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                                         // 返回原始尺寸供坐标计算使用
-                                        val result = ScreenshotData(originalWidth, originalHeight, base64)
+                                        val result =
+                                                ScreenshotData(
+                                                        originalWidth,
+                                                        originalHeight,
+                                                        base64
+                                                )
                                         bmpForCompress.recycle()
                                         if (cont.isActive) cont.resume(result)
                                     } catch (_: Exception) {
                                         if (cont.isActive) cont.resume(null)
                                     } finally {
-                                        runCatching {
-                                                    screenshot.hardwareBuffer.close()
-                                                }
+                                        runCatching { screenshot.hardwareBuffer.close() }
                                         runCatching { executor.shutdown() }
                                     }
                                 }
@@ -306,12 +357,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
 
     private fun sanitizeAttr(value: CharSequence?, maxLength: Int): String? {
         if (value.isNullOrBlank()) return null
-        val cleaned =
-                value
-                        .toString()
-                        .replace("\n", " ")
-                        .replace("\r", " ")
-                        .trim()
+        val cleaned = value.toString().replace("\n", " ").replace("\r", " ").trim()
         if (cleaned.isBlank()) return null
         return if (cleaned.length > maxLength) cleaned.take(maxLength) else cleaned
     }
@@ -328,11 +374,12 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         counter[0]++
 
         val bounds = Rect().also { node.getBoundsInScreen(it) }
-        val maxAttrLen = when (detailLevel) {
-            UiDetailLevel.MINIMAL -> 40
-            UiDetailLevel.SUMMARY -> 80
-            UiDetailLevel.FULL -> 140
-        }
+        val maxAttrLen =
+                when (detailLevel) {
+                    UiDetailLevel.MINIMAL -> 40
+                    UiDetailLevel.SUMMARY -> 80
+                    UiDetailLevel.FULL -> 140
+                }
 
         val className = sanitizeAttr(node.className, maxAttrLen) ?: ""
         val packageName = sanitizeAttr(node.packageName, maxAttrLen) ?: ""
@@ -478,7 +525,9 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return "(no active window)"
         val detailLevel = normalizeDetailLevel(detail)
         val counter = intArrayOf(0)
-        val snapshot = buildNodeSnapshot(root, detailLevel, maxNodes, counter) ?: return "(no active window)"
+        val snapshot =
+                buildNodeSnapshot(root, detailLevel, maxNodes, counter)
+                        ?: return "(no active window)"
 
         val pkg = sanitizeAttr(root.packageName, 120).orEmpty()
         val activity = sanitizeAttr(root.className, 120)
@@ -486,16 +535,20 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         val sb = StringBuilder()
         sb.append("<ui_hierarchy")
         if (pkg.isNotBlank()) sb.append(" package=\"").append(escapeXml(pkg)).append('\"')
-        if (!activity.isNullOrBlank()) sb.append(" activity=\"").append(escapeXml(activity)).append('\"')
+        if (!activity.isNullOrBlank())
+                sb.append(" activity=\"").append(escapeXml(activity)).append('\"')
         sb.append(">")
         appendNodeXml(sb, snapshot, detailLevel, 0)
         sb.append("\n</ui_hierarchy>")
         if (counter[0] >= maxNodes) {
             sb.append("<!-- truncated, maxNodes=").append(maxNodes).append(" -->")
         }
-        
+
         val result = sb.toString()
-        Log.d("UI_TREE", "XML格式已生成: 根元素=<ui_hierarchy>, package=$pkg, activity=$activity, 节点数=${counter[0]}, 长度=${result.length}")
+        Log.d(
+                "UI_TREE",
+                "XML格式已生成: 根元素=<ui_hierarchy>, package=$pkg, activity=$activity, 节点数=${counter[0]}, 长度=${result.length}"
+        )
         return result
     }
 
@@ -516,20 +569,26 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         return rootObj.toString()
     }
 
-    fun getUiHierarchy(format: String = "xml", detail: String = "minimal", maxNodes: Int = 30): String {
-        val result = when (format.lowercase()) {
-            "json" -> dumpUiTreeJson(maxNodes, detail)
-            else -> dumpUiTreeXml(maxNodes, detail)
-        }
+    fun getUiHierarchy(
+            format: String = "xml",
+            detail: String = "minimal",
+            maxNodes: Int = 30
+    ): String {
+        val result =
+                when (format.lowercase()) {
+                    "json" -> dumpUiTreeJson(maxNodes, detail)
+                    else -> dumpUiTreeXml(maxNodes, detail)
+                }
         Log.d("UI_TREE", "格式=$format, 详情=$detail, 节点≤$maxNodes, 长度=${result.length}")
         return result
     }
 
-    /**
-     * 带重试机制的 UI 树获取
-    * getUIHierarchyWithRetry 策略
-     */
-    suspend fun dumpUiTreeWithRetry(maxNodes: Int = 30, maxRetries: Int = 3, retryDelayMs: Long = 300): String {
+    /** 带重试机制的 UI 树获取 getUIHierarchyWithRetry 策略 */
+    suspend fun dumpUiTreeWithRetry(
+            maxNodes: Int = 30,
+            maxRetries: Int = 3,
+            retryDelayMs: Long = 300
+    ): String {
         repeat(maxRetries) { attempt ->
             val result = dumpUiTree(maxNodes)
             if (result != "(no active window)" && result.isNotBlank()) {
@@ -576,10 +635,8 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         }
         return null
     }
-    
-    /**
-     * 查找并点击第一个可编辑的输入框元素
-     */
+
+    /** 查找并点击第一个可编辑的输入框元素 */
     suspend fun clickFirstEditableElement(): Boolean {
         val root = rootInActiveWindow ?: return false
         val editable = findFirstEditableElement(root) ?: return false
@@ -588,7 +645,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         if (bounds.width() <= 0 || bounds.height() <= 0) return false
         return clickAwait(bounds.centerX().toFloat(), bounds.centerY().toFloat())
     }
-    
+
     private fun findFirstEditableElement(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val q = ArrayDeque<AccessibilityNodeInfo>()
         q.add(root)
@@ -687,7 +744,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     // ============================================================================
     // Operit 同款工具接口 - TODO-007 wait_for_element
     // ============================================================================
-    
+
     /**
      * 等待元素出现（轮询机制）
      * @param resourceId 资源ID（如 "com.example:id/button"）
@@ -699,25 +756,31 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
      * @return 是否找到元素
      */
     suspend fun waitForElement(
-        resourceId: String? = null,
-        text: String? = null,
-        contentDesc: String? = null,
-        className: String? = null,
-        timeoutMs: Long = 5000L,
-        pollIntervalMs: Long = 200L,
+            resourceId: String? = null,
+            text: String? = null,
+            contentDesc: String? = null,
+            className: String? = null,
+            timeoutMs: Long = 5000L,
+            pollIntervalMs: Long = 200L,
     ): Boolean {
-        if (resourceId.isNullOrBlank() && text.isNullOrBlank() && 
-            contentDesc.isNullOrBlank() && className.isNullOrBlank()) {
+        if (resourceId.isNullOrBlank() &&
+                        text.isNullOrBlank() &&
+                        contentDesc.isNullOrBlank() &&
+                        className.isNullOrBlank()
+        ) {
             return false // 至少需要一个选择器
         }
-        
+
         val startTime = android.os.SystemClock.uptimeMillis()
         while (android.os.SystemClock.uptimeMillis() - startTime < timeoutMs) {
             val root = rootInActiveWindow
             if (root != null) {
                 val found = findNode(root, resourceId, text, contentDesc, className, 0)
                 if (found != null) {
-                    Log.d("WAIT_ELEMENT", "元素已找到: resourceId=$resourceId, text=$text, 耗时=${android.os.SystemClock.uptimeMillis() - startTime}ms")
+                    Log.d(
+                            "WAIT_ELEMENT",
+                            "元素已找到: resourceId=$resourceId, text=$text, 耗时=${android.os.SystemClock.uptimeMillis() - startTime}ms"
+                    )
                     return true
                 }
             }
@@ -726,42 +789,42 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         Log.d("WAIT_ELEMENT", "等待超时: resourceId=$resourceId, text=$text, timeout=${timeoutMs}ms")
         return false
     }
-    
+
     // ============================================================================
     // Operit 同款工具接口 - TODO-012 find_elements
     // ============================================================================
-    
+
     /**
      * 查找所有匹配的元素
      * @return 匹配元素的信息列表 (JSON格式)
      */
     fun findElements(
-        resourceId: String? = null,
-        text: String? = null,
-        contentDesc: String? = null,
-        className: String? = null,
-        maxResults: Int = 10,
+            resourceId: String? = null,
+            text: String? = null,
+            contentDesc: String? = null,
+            className: String? = null,
+            maxResults: Int = 10,
     ): String {
         val root = rootInActiveWindow ?: return "[]"
         val results = mutableListOf<JSONObject>()
-        
+
         findAllMatchingNodes(root, resourceId, text, contentDesc, className, maxResults, results)
-        
+
         val jsonArray = JSONArray()
         results.forEach { jsonArray.put(it) }
-        
+
         Log.d("FIND_ELEMENTS", "找到 ${results.size} 个匹配元素: resourceId=$resourceId, text=$text")
         return jsonArray.toString()
     }
-    
+
     private fun findAllMatchingNodes(
-        root: AccessibilityNodeInfo,
-        resourceId: String?,
-        text: String?,
-        contentDesc: String?,
-        className: String?,
-        maxResults: Int,
-        results: MutableList<JSONObject>,
+            root: AccessibilityNodeInfo,
+            resourceId: String?,
+            text: String?,
+            contentDesc: String?,
+            className: String?,
+            maxResults: Int,
+            results: MutableList<JSONObject>,
     ) {
         fun matches(node: AccessibilityNodeInfo): Boolean {
             val id = node.viewIdResourceName?.trim().orEmpty()
@@ -775,8 +838,11 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
                 if (!id.endsWith(resourceId) && !id.contains(resourceId)) return false
             }
             if (!className.isNullOrBlank()) {
-                if (clsFull != className && clsShort != className && 
-                    !clsFull.contains(className, ignoreCase = true)) return false
+                if (clsFull != className &&
+                                clsShort != className &&
+                                !clsFull.contains(className, ignoreCase = true)
+                )
+                        return false
             }
             if (!text.isNullOrBlank()) {
                 if (t.isBlank()) return false
@@ -788,7 +854,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
             }
             return true
         }
-        
+
         fun nodeToJson(node: AccessibilityNodeInfo, index: Int): JSONObject {
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
@@ -838,39 +904,43 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
             null
         }
     }
-    
+
     // ============================================================================
     // Operit 同款工具接口 - TODO-009 press_key
     // ============================================================================
-    
+
     /**
      * 统一的按键接口
-     * @param keyCode 按键码: HOME, BACK, RECENTS, NOTIFICATIONS, QUICK_SETTINGS, POWER_DIALOG, LOCK_SCREEN
+     * @param keyCode 按键码: HOME, BACK, RECENTS, NOTIFICATIONS, QUICK_SETTINGS, POWER_DIALOG,
+     * LOCK_SCREEN
      * @return 是否成功
      */
     fun pressKey(keyCode: String): Boolean {
-        val action = when (keyCode.uppercase().trim()) {
-            "HOME" -> GLOBAL_ACTION_HOME
-            "BACK" -> GLOBAL_ACTION_BACK
-            "RECENTS" -> GLOBAL_ACTION_RECENTS
-            "NOTIFICATIONS" -> GLOBAL_ACTION_NOTIFICATIONS
-            "QUICK_SETTINGS" -> GLOBAL_ACTION_QUICK_SETTINGS
-            "POWER_DIALOG" -> GLOBAL_ACTION_POWER_DIALOG
-            "LOCK_SCREEN" -> if (Build.VERSION.SDK_INT >= 28) GLOBAL_ACTION_LOCK_SCREEN else return false
-            else -> {
-                Log.w("PRESS_KEY", "未知按键码: $keyCode")
-                return false
-            }
-        }
+        val action =
+                when (keyCode.uppercase().trim()) {
+                    "HOME" -> GLOBAL_ACTION_HOME
+                    "BACK" -> GLOBAL_ACTION_BACK
+                    "RECENTS" -> GLOBAL_ACTION_RECENTS
+                    "NOTIFICATIONS" -> GLOBAL_ACTION_NOTIFICATIONS
+                    "QUICK_SETTINGS" -> GLOBAL_ACTION_QUICK_SETTINGS
+                    "POWER_DIALOG" -> GLOBAL_ACTION_POWER_DIALOG
+                    "LOCK_SCREEN" ->
+                            if (Build.VERSION.SDK_INT >= 28) GLOBAL_ACTION_LOCK_SCREEN
+                            else return false
+                    else -> {
+                        Log.w("PRESS_KEY", "未知按键码: $keyCode")
+                        return false
+                    }
+                }
         val result = performGlobalAction(action)
         Log.d("PRESS_KEY", "按键 $keyCode -> action=$action, result=$result")
         return result
     }
-    
+
     // ============================================================================
     // Operit 同款工具接口 - TODO-010 get_current_app
     // ============================================================================
-    
+
     /**
      * 获取当前应用详细信息
      * @return JSON格式的应用信息
@@ -878,7 +948,7 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     // ============================================================================
     // Operit 同款工具接口 - scroll_to_element (优化新增)
     // ============================================================================
-    
+
     /**
      * 滚动到目标元素，直到元素可见或达到最大滚动次数
      * @param resourceId 资源ID（如 "com.example:id/button"）
@@ -891,22 +961,28 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
      * @return 是否成功找到元素
      */
     suspend fun scrollToElement(
-        resourceId: String? = null,
-        text: String? = null,
-        contentDesc: String? = null,
-        className: String? = null,
-        direction: String = "down",
-        maxScrolls: Int = 10,
-        scrollDelayMs: Long = 500L,
+            resourceId: String? = null,
+            text: String? = null,
+            contentDesc: String? = null,
+            className: String? = null,
+            direction: String = "down",
+            maxScrolls: Int = 10,
+            scrollDelayMs: Long = 500L,
     ): Boolean {
-        if (resourceId.isNullOrBlank() && text.isNullOrBlank() && 
-            contentDesc.isNullOrBlank() && className.isNullOrBlank()) {
+        if (resourceId.isNullOrBlank() &&
+                        text.isNullOrBlank() &&
+                        contentDesc.isNullOrBlank() &&
+                        className.isNullOrBlank()
+        ) {
             Log.w("SCROLL_TO_ELEMENT", "至少需要一个选择器参数")
             return false
         }
-        
-        Log.d("SCROLL_TO_ELEMENT", "开始滚动查找: resourceId=$resourceId, text=$text, direction=$direction")
-        
+
+        Log.d(
+                "SCROLL_TO_ELEMENT",
+                "开始滚动查找: resourceId=$resourceId, text=$text, direction=$direction"
+        )
+
         // 首先检查元素是否已经可见
         val root = rootInActiveWindow
         if (root != null) {
@@ -916,17 +992,17 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
                 return true
             }
         }
-        
+
         // 执行滚动查找
         repeat(maxScrolls) { scrollCount ->
             Log.d("SCROLL_TO_ELEMENT", "滚动第 ${scrollCount + 1}/$maxScrolls 次")
-            
+
             // 执行滚动
             performScroll(direction)
-            
+
             // 等待界面稳定
             delay(scrollDelayMs)
-            
+
             // 检查元素是否已出现
             val currentRoot = rootInActiveWindow
             if (currentRoot != null) {
@@ -937,71 +1013,71 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
                 }
             }
         }
-        
+
         Log.w("SCROLL_TO_ELEMENT", "达到最大滚动次数 $maxScrolls，未找到目标元素")
         return false
     }
-    
-    /**
-     * 检查元素是否在屏幕可见区域内
-     */
+
+    /** 检查元素是否在屏幕可见区域内 */
     private fun isElementVisible(node: AccessibilityNodeInfo): Boolean {
         val bounds = Rect()
         node.getBoundsInScreen(bounds)
-        
+
         // 获取屏幕尺寸
         val dm = resources.displayMetrics
         val screenWidth = dm.widthPixels
         val screenHeight = dm.heightPixels
-        
+
         // 检查元素是否在屏幕范围内
-        return bounds.left >= 0 && bounds.top >= 0 && 
-               bounds.right <= screenWidth && bounds.bottom <= screenHeight &&
-               bounds.width() > 0 && bounds.height() > 0
+        return bounds.left >= 0 &&
+                bounds.top >= 0 &&
+                bounds.right <= screenWidth &&
+                bounds.bottom <= screenHeight &&
+                bounds.width() > 0 &&
+                bounds.height() > 0
     }
-    
-    /**
-     * 执行滚动操作
-     */
+
+    /** 执行滚动操作 */
     private suspend fun performScroll(direction: String) {
         val dm = resources.displayMetrics
         val screenWidth = dm.widthPixels
         val screenHeight = dm.heightPixels
-        
+
         // 滚动区域设置为屏幕中央80%区域，避免触碰边缘控件
         val centerX = screenWidth * 0.5f
         val centerY = screenHeight * 0.5f
         val scrollDistance = minOf(screenWidth, screenHeight) * 0.3f // 滚动距离为屏幕30%
-        
-        val (startX, startY, endX, endY) = when (direction.lowercase().trim()) {
-            "up" -> {
-                val startY = centerY + scrollDistance
-                val endY = centerY - scrollDistance
-                arrayOf(centerX, startY, centerX, endY)
-            }
-            "down" -> {
-                val startY = centerY - scrollDistance
-                val endY = centerY + scrollDistance
-                arrayOf(centerX, startY, centerX, endY)
-            }
-            "left" -> {
-                val startX = centerX + scrollDistance
-                val endX = centerX - scrollDistance
-                arrayOf(startX, centerY, endX, centerY)
-            }
-            "right" -> {
-                val startX = centerX - scrollDistance
-                val endX = centerX + scrollDistance
-                arrayOf(startX, centerY, endX, centerY)
-            }
-            else -> {
-                Log.w("SCROLL_TO_ELEMENT", "未知滚动方向: $direction，使用默认向下滚动")
-                val startY = centerY - scrollDistance
-                val endY = centerY + scrollDistance
-                arrayOf(centerX, startY, centerX, endY)
-            }
-        }
-        
+
+        val (startX, startY, endX, endY) =
+                when (direction.lowercase().trim()) {
+                    "up" -> {
+                        val startY = centerY + scrollDistance
+                        val endY = centerY - scrollDistance
+                        arrayOf(centerX, startY, centerX, endY)
+                    }
+                    "down" -> {
+                        val startY = centerY - scrollDistance
+                        val endY = centerY + scrollDistance
+                        arrayOf(centerX, startY, centerX, endY)
+                    }
+                    "left" -> {
+                        val startX = centerX + scrollDistance
+                        val endX = centerX - scrollDistance
+                        arrayOf(startX, centerY, endX, centerY)
+                    }
+                    "right" -> {
+                        val startX = centerX - scrollDistance
+                        val endX = centerX + scrollDistance
+                        arrayOf(startX, centerY, endX, centerY)
+                    }
+                    else -> {
+                        Log.w("SCROLL_TO_ELEMENT", "未知滚动方向: $direction，使用默认向下滚动")
+                        val startY = centerY - scrollDistance
+                        val endY = centerY + scrollDistance
+                        arrayOf(centerX, startY, centerX, endY)
+                    }
+                }
+
         // 执行滑动手势
         swipe(startX, startY, endX, endY, 400L)
     }
@@ -1010,12 +1086,14 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow
         val packageName = root?.packageName?.toString() ?: "unknown"
         val activityClass = root?.className?.toString() ?: "unknown"
-        
-        return JSONObject().apply {
-            put("package_name", packageName)
-            put("activity_class", activityClass)
-            put("timestamp", System.currentTimeMillis())
-        }.toString()
+
+        return JSONObject()
+                .apply {
+                    put("package_name", packageName)
+                    put("activity_class", activityClass)
+                    put("timestamp", System.currentTimeMillis())
+                }
+                .toString()
     }
 
     suspend fun clickElement(
@@ -1033,8 +1111,13 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
             val target = findNode(root, resourceId, text, contentDesc, className, index)
             if (target != null) {
                 val clickable = findClickableAncestor(target) ?: target
-                if (clickable.isClickable && clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                    Log.d("CLICK_ELEMENT", "selector点击成功: res=$resourceId text=$text class=$className idx=$index")
+                if (clickable.isClickable &&
+                                clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                ) {
+                    Log.d(
+                            "CLICK_ELEMENT",
+                            "selector点击成功: res=$resourceId text=$text class=$className idx=$index"
+                    )
                     return true
                 }
                 val r = Rect()
@@ -1061,7 +1144,10 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
             return ok
         }
 
-        Log.w("CLICK_ELEMENT", "未找到元素且无兜底坐标: res=$resourceId text=$text class=$className idx=$index")
+        Log.w(
+                "CLICK_ELEMENT",
+                "未找到元素且无兜底坐标: res=$resourceId text=$text class=$className idx=$index"
+        )
         return false
     }
 
@@ -1075,7 +1161,8 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     ): Boolean {
         val root = rootInActiveWindow ?: return false
         val target =
-                findNode(root, resourceId, elementText, contentDesc, className, index) ?: return false
+                findNode(root, resourceId, elementText, contentDesc, className, index)
+                        ?: return false
 
         if (!target.isFocused) {
             target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -1135,8 +1222,9 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
                 // 增强匹配：原始 + 规范化
                 val normalizedNodeText = normalizeText(t)
                 val normalizedSearchText = normalizeText(text)
-                if (!t.contains(text, ignoreCase = true) && 
-                    !normalizedNodeText.contains(normalizedSearchText)) {
+                if (!t.contains(text, ignoreCase = true) &&
+                                !normalizedNodeText.contains(normalizedSearchText)
+                ) {
                     return false
                 }
             }
@@ -1145,8 +1233,9 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
                 // 增强匹配：原始 + 规范化
                 val normalizedNodeDesc = normalizeText(d)
                 val normalizedSearchDesc = normalizeText(contentDesc)
-                if (!d.contains(contentDesc, ignoreCase = true) && 
-                    !normalizedNodeDesc.contains(normalizedSearchDesc)) {
+                if (!d.contains(contentDesc, ignoreCase = true) &&
+                                !normalizedNodeDesc.contains(normalizedSearchDesc)
+                ) {
                     return false
                 }
             }

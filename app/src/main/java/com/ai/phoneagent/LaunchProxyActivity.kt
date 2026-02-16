@@ -8,10 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 
-/**
- * 透明跳板 Activity，用于在前台安全地拉起目标应用，避免"后台启动应用"弹窗。
- * 支持将应用启动到指定 displayId（虚拟屏模式）。
- */
+/** 透明跳板 Activity，用于在前台安全地拉起目标应用，避免"后台启动应用"弹窗。 支持将应用启动到指定 displayId（虚拟屏模式）。 */
 class LaunchProxyActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,9 +42,7 @@ class LaunchProxyActivity : Activity() {
         overridePendingTransition(0, 0)
     }
 
-    /**
-     * 通过 ActivityOptions.setLaunchDisplayId 启动应用到指定 display
-     */
+    /** 通过 ActivityOptions.setLaunchDisplayId 启动应用到指定 display */
     private fun launchOnTargetDisplay(target: Intent, displayId: Int): Boolean {
         return try {
             val options = ActivityOptions.makeBasic()
@@ -61,20 +56,19 @@ class LaunchProxyActivity : Activity() {
         }
     }
 
-    /**
-     * Fallback：通过 Shizuku 的 am start --display 命令启动
-     */
+    /** Fallback：通过 Shizuku 的 am start --display 命令启动 */
     private fun launchViaShellFallback(target: Intent, displayId: Int) {
         try {
             val component = target.component
             if (component != null) {
                 val componentStr = "${component.packageName}/${component.className}"
                 val flags = target.flags
-                val candidates = listOf(
-                    "cmd activity start-activity --user 0 --display $displayId --windowingMode 1 -n $componentStr -f $flags",
-                    "am start --user 0 --display $displayId -n $componentStr -f $flags",
-                    "am start --display $displayId -n $componentStr -f $flags",
-                )
+                val candidates =
+                        listOf(
+                                "cmd activity start-activity --user 0 --display $displayId --windowingMode 1 -n $componentStr -f $flags",
+                                "am start --user 0 --display $displayId -n $componentStr -f $flags",
+                                "am start --display $displayId -n $componentStr -f $flags",
+                        )
                 for (cmd in candidates) {
                     val result = runCatching { ShizukuBridge.execResult(cmd) }.getOrNull()
                     if (result != null && result.exitCode == 0) {
@@ -94,9 +88,7 @@ class LaunchProxyActivity : Activity() {
         private const val EXTRA_TARGET_INTENT = "target_intent"
         private const val EXTRA_DISPLAY_ID = "display_id"
 
-        /**
-         * 启动应用到默认显示器（前台模式）
-         */
+        /** 启动应用到默认显示器（前台模式） */
         fun launch(context: Context, targetIntent: Intent) {
             val proxy = Intent(context, LaunchProxyActivity::class.java)
             proxy.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -104,9 +96,7 @@ class LaunchProxyActivity : Activity() {
             context.startActivity(proxy)
         }
 
-        /**
-         * 启动应用到指定 displayId（虚拟屏模式）
-         */
+        /** 启动应用到指定 displayId（虚拟屏模式） */
         fun launchOnDisplay(context: Context, targetIntent: Intent, displayId: Int) {
             if (displayId <= 0) {
                 launch(context, targetIntent)

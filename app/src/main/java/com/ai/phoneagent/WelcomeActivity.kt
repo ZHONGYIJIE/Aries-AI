@@ -9,14 +9,13 @@
 package com.ai.phoneagent
 
 import android.app.Activity
-import android.os.Bundle
 import android.content.Context
-import android.view.View
-import android.view.inputmethod.InputMethodManager
-import android.view.KeyEvent
-import android.view.WindowManager
+import android.os.Bundle
 import android.util.Log
-import android.os.SystemClock
+import android.view.KeyEvent
+import android.view.View
+import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 
 /**
  * 虚拟屏欢迎/兜底 Activity — 焦点隔离模式。
@@ -52,9 +51,10 @@ class WelcomeActivity : Activity() {
                 // FLAG_NOT_FOCUSABLE = 0x00000008：此窗口不能获得焦点
                 // FLAG_NOT_TOUCHABLE = 0x00000010：此窗口不接收触摸事件（可选）
                 // 这两个 flag 叠加使用，会让 Activity 彻底"透明"给输入系统
-                attrs.flags = attrs.flags or
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                attrs.flags =
+                        attrs.flags or
+                                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 window?.attributes = attrs
                 Log.i(TAG, "Window attributes set: NOT_FOCUSABLE | NOT_TOUCHABLE")
             }
@@ -80,15 +80,17 @@ class WelcomeActivity : Activity() {
     }
 
     /**
-     * 拦截所有按键事件，立即恢复焦点到主屏。
-     * 这是防止虚拟屏接收用户按键的最后防线。
+     * 拦截所有按键事件，立即恢复焦点到主屏。 这是防止虚拟屏接收用户按键的最后防线。
      *
      * @return true 表示此 Activity 处理了事件（但实际上我们不消费，而是转交给主屏）
      */
     override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
         if (event != null && event.action == KeyEvent.ACTION_DOWN) {
             // 检测到有按键事件进入虚拟屏 Activity → 立即恢复焦点到主屏
-            Log.d(TAG, "Key event detected on virtual display: ${event.keyCode}, restoring focus to main")
+            Log.d(
+                    TAG,
+                    "Key event detected on virtual display: ${event.keyCode}, restoring focus to main"
+            )
             restoreFocusToMainDisplay()
         }
         // 不消费事件，让其继续传递（给到虚拟屏上的其他 Window）
@@ -103,27 +105,21 @@ class WelcomeActivity : Activity() {
         return
     }
 
-    /**
-     * 立即恢复焦点到主屏（display 0）。
-     * 通过 Shizuku + Input Manager 的反射调用实现。
-     */
+    /** 立即恢复焦点到主屏（display 0）。 通过 Shizuku + Input Manager 的反射调用实现。 */
     private fun restoreFocusToMainDisplay() {
-        runCatching {
-            VirtualDisplayController.restoreFocusToDefaultDisplayNow()
-        }.onFailure {
+        runCatching { VirtualDisplayController.restoreFocusToDefaultDisplayNow() }.onFailure {
             Log.e(TAG, "Failed to restore focus to main display", it)
         }
     }
 
-    /**
-     * 延迟恢复焦点到主屏（备用机制）。
-     * 当 Activity 创建时，系统的自动焦点切换可能还在进行中。
-     * 延迟执行可以确保在 Activity Window 完全创建后再恢复焦点。
-     */
+    /** 延迟恢复焦点到主屏（备用机制）。 当 Activity 创建时，系统的自动焦点切换可能还在进行中。 延迟执行可以确保在 Activity Window 完全创建后再恢复焦点。 */
     private fun scheduleFocusRestore() {
-        window?.decorView?.postDelayed({
-            Log.d(TAG, "Scheduled focus restore executing")
-            restoreFocusToMainDisplay()
-        }, 500)
+        window?.decorView?.postDelayed(
+                {
+                    Log.d(TAG, "Scheduled focus restore executing")
+                    restoreFocusToMainDisplay()
+                },
+                500
+        )
     }
 }

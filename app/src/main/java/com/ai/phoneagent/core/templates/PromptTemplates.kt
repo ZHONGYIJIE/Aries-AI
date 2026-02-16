@@ -33,10 +33,11 @@ object PromptTemplates {
             return x
         }
 
-        val ratio = if (screenW > 0 && screenH > 0) {
-            val d = gcd(screenW, screenH)
-            "${screenW / d}:${screenH / d}"
-        } else "1:1"
+        val ratio =
+                if (screenW > 0 && screenH > 0) {
+                    val d = gcd(screenW, screenH)
+                    "${screenW / d}:${screenH / d}"
+                } else "1:1"
 
         return """# 手机 UI 自动化助手
 

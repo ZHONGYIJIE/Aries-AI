@@ -25,8 +25,8 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.ai.phoneagent.vdiso.ShizukuVirtualDisplayEngine
 import com.ai.phoneagent.input.InputHelper
+import com.ai.phoneagent.vdiso.ShizukuVirtualDisplayEngine
 
 /**
  * 虚拟屏预览悬浮窗 — 让用户实时观看虚拟屏执行过程
@@ -48,7 +48,7 @@ object VirtualScreenPreviewOverlay {
 
     // 预览窗宽高（展开状态，dp）
     private const val EXPANDED_WIDTH_DP = 240
-    private const val EXPANDED_HEIGHT_DP = 427  // 16:9 竖屏
+    private const val EXPANDED_HEIGHT_DP = 427 // 16:9 竖屏
     // 标题栏与底部控制栏高度
     private const val HEADER_HEIGHT_DP = 28
     private const val CONTROL_BAR_HEIGHT_DP = 40
@@ -58,7 +58,7 @@ object VirtualScreenPreviewOverlay {
     @Volatile private var wm: WindowManager? = null
     @Volatile private var containerView: PreviewContainer? = null
     @Volatile private var miniView: MiniThumb? = null
-    @Volatile private var bgProgressView: BackgroundProgressView? = null  // 后台操作进度悬浮窗
+    @Volatile private var bgProgressView: BackgroundProgressView? = null // 后台操作进度悬浮窗
     @Volatile private var isExpanded: Boolean = true
     @Volatile private var isBound: Boolean = false
     @Volatile private var isPaused: Boolean = false
@@ -78,7 +78,7 @@ object VirtualScreenPreviewOverlay {
         val dm = appCtx.resources.displayMetrics
 
         val view = PreviewContainer(windowCtx)
-        
+
         // 根据虚拟屏实际比例计算预览窗宽高
         val (contentW, contentH) = VirtualDisplayController.getContentSizeBestEffort(appCtx)
         val overlayW: Int
@@ -93,18 +93,20 @@ object VirtualScreenPreviewOverlay {
         }
         val overlayH = previewH + dp(appCtx, HEADER_HEIGHT_DP) + dp(appCtx, CONTROL_BAR_HEIGHT_DP)
 
-        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        val flags =
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
 
         val baseX = dp(appCtx, 12)
         val baseY = dm.heightPixels - overlayH - dp(appCtx, 80)
 
         val typeCandidates = buildList {
             if (svc != null) add(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-            val overlayOk = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                Settings.canDrawOverlays(appCtx)
-            } else true
+            val overlayOk =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        Settings.canDrawOverlays(appCtx)
+                    } else true
             if (overlayOk) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     add(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
@@ -116,12 +118,27 @@ object VirtualScreenPreviewOverlay {
 
         var lastErr: Throwable? = null
         for (type in typeCandidates.distinct()) {
-            val lp = WindowManager.LayoutParams(overlayW, overlayH, type, flags, PixelFormat.TRANSLUCENT)
+            val lp =
+                    WindowManager.LayoutParams(
+                            overlayW,
+                            overlayH,
+                            type,
+                            flags,
+                            PixelFormat.TRANSLUCENT
+                    )
             lp.gravity = Gravity.TOP or Gravity.START
             lp.x = baseX
             lp.y = baseY
             view.attachWindowManager(w, lp)
-            val ok = runCatching { w.addView(view, lp); true }.getOrElse { lastErr = it; false }
+            val ok =
+                    runCatching {
+                        w.addView(view, lp)
+                        true
+                    }
+                            .getOrElse {
+                                lastErr = it
+                                false
+                            }
             if (ok) {
                 wm = w
                 containerView = view
@@ -247,8 +264,12 @@ object VirtualScreenPreviewOverlay {
     }
 
     private fun dp(context: Context, dp: Int): Int {
-        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp.toFloat(),
-            context.resources.displayMetrics).toInt()
+        return TypedValue.applyDimension(
+                        TypedValue.COMPLEX_UNIT_DIP,
+                        dp.toFloat(),
+                        context.resources.displayMetrics
+                )
+                .toInt()
     }
 
     // ═══════════════════════════════════════════════════════
@@ -262,8 +283,10 @@ object VirtualScreenPreviewOverlay {
         var onRestore: (() -> Unit)? = null
 
         private var isDragging = false
-        private var downX = 0f; private var downY = 0f
-        private var lastX = 0f; private var lastY = 0f
+        private var downX = 0f
+        private var downY = 0f
+        private var lastX = 0f
+        private var lastY = 0f
 
         init {
             val bg = GradientDrawable()
@@ -273,19 +296,22 @@ object VirtualScreenPreviewOverlay {
             background = bg
             elevation = dp(6).toFloat()
 
-            val label = TextView(context).apply {
-                text = "📺"
-                textSize = 18f
-                gravity = Gravity.CENTER
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-            }
+            val label =
+                    TextView(context).apply {
+                        text = "📺"
+                        textSize = 18f
+                        gravity = Gravity.CENTER
+                        layoutParams =
+                                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+                    }
             addView(label)
 
             setOnClickListener { onRestore?.invoke() }
         }
 
         fun attachWindowManager(wm: WindowManager, lp: WindowManager.LayoutParams) {
-            currentWm = wm; currentLp = lp
+            currentWm = wm
+            currentLp = lp
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -293,29 +319,44 @@ object VirtualScreenPreviewOverlay {
             val wm = currentWm ?: return super.onTouchEvent(event)
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    isDragging = false; downX = event.rawX; downY = event.rawY
-                    lastX = event.rawX; lastY = event.rawY; return true
+                    isDragging = false
+                    downX = event.rawX
+                    downY = event.rawY
+                    lastX = event.rawX
+                    lastY = event.rawY
+                    return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!isDragging && (Math.abs(event.rawX - downX) > 10 || Math.abs(event.rawY - downY) > 10)) isDragging = true
+                    if (!isDragging &&
+                                    (Math.abs(event.rawX - downX) > 10 ||
+                                            Math.abs(event.rawY - downY) > 10)
+                    )
+                            isDragging = true
                     if (isDragging) {
                         lp.x += (event.rawX - lastX).toInt()
                         lp.y += (event.rawY - lastY).toInt()
                         runCatching { wm.updateViewLayout(this, lp) }
-                        lastX = event.rawX; lastY = event.rawY
+                        lastX = event.rawX
+                        lastY = event.rawY
                     }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!isDragging) performClick()
-                    isDragging = false; return true
+                    isDragging = false
+                    return true
                 }
             }
             return super.onTouchEvent(event)
         }
 
-        private fun dp(v: Int): Int = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), context.resources.displayMetrics).toInt()
+        private fun dp(v: Int): Int =
+                TypedValue.applyDimension(
+                                TypedValue.COMPLEX_UNIT_DIP,
+                                v.toFloat(),
+                                context.resources.displayMetrics
+                        )
+                        .toInt()
     }
 
     // ═══════════════════════════════════════════════════════
@@ -331,8 +372,10 @@ object VirtualScreenPreviewOverlay {
         private val statusText: TextView
 
         private var isDragging = false
-        private var downX = 0f; private var downY = 0f
-        private var lastX = 0f; private var lastY = 0f
+        private var downX = 0f
+        private var downY = 0f
+        private var lastX = 0f
+        private var lastY = 0f
 
         init {
             // 整体背景
@@ -344,42 +387,50 @@ object VirtualScreenPreviewOverlay {
             elevation = dp(6).toFloat()
 
             // 左侧图标
-            val icon = TextView(context).apply {
-                text = "📱"
-                textSize = 16f
-                gravity = Gravity.CENTER
-                layoutParams = LayoutParams(dp(32), LayoutParams.MATCH_PARENT)
-            }
+            val icon =
+                    TextView(context).apply {
+                        text = "📱"
+                        textSize = 16f
+                        gravity = Gravity.CENTER
+                        layoutParams = LayoutParams(dp(32), LayoutParams.MATCH_PARENT)
+                    }
             addView(icon)
 
             // 中间状态文字
-            statusText = TextView(context).apply {
-                text = "后台运行中..."
-                setTextColor(Color.WHITE)
-                textSize = 12f
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
-                    marginStart = dp(4)
-                }
-            }
+            statusText =
+                    TextView(context).apply {
+                        text = "后台运行中..."
+                        setTextColor(Color.WHITE)
+                        textSize = 12f
+                        gravity = Gravity.CENTER_VERTICAL
+                        layoutParams =
+                                LinearLayout.LayoutParams(
+                                                0,
+                                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                                1f
+                                        )
+                                        .apply { marginStart = dp(4) }
+                    }
             addView(statusText)
 
             // 右侧关闭按钮
-            val closeBtn = TextView(context).apply {
-                text = "✕"
-                setTextColor(Color.argb(180, 255, 255, 255))
-                textSize = 12f
-                gravity = Gravity.CENTER
-                layoutParams = LayoutParams(dp(24), LayoutParams.MATCH_PARENT)
-                setOnClickListener { onClose?.invoke() }
-            }
+            val closeBtn =
+                    TextView(context).apply {
+                        text = "✕"
+                        setTextColor(Color.argb(180, 255, 255, 255))
+                        textSize = 12f
+                        gravity = Gravity.CENTER
+                        layoutParams = LayoutParams(dp(24), LayoutParams.MATCH_PARENT)
+                        setOnClickListener { onClose?.invoke() }
+                    }
             addView(closeBtn)
 
             setPadding(dp(8), dp(4), dp(8), dp(4))
         }
 
         fun attachWindowManager(wm: WindowManager, lp: WindowManager.LayoutParams) {
-            currentWm = wm; currentLp = lp
+            currentWm = wm
+            currentLp = lp
         }
 
         fun updateProgress(text: String, progress: Int) {
@@ -391,28 +442,43 @@ object VirtualScreenPreviewOverlay {
             val wm = currentWm ?: return super.onTouchEvent(event)
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    isDragging = false; downX = event.rawX; downY = event.rawY
-                    lastX = event.rawX; lastY = event.rawY; return true
+                    isDragging = false
+                    downX = event.rawX
+                    downY = event.rawY
+                    lastX = event.rawX
+                    lastY = event.rawY
+                    return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!isDragging && (Math.abs(event.rawX - downX) > 10 || Math.abs(event.rawY - downY) > 10)) isDragging = true
+                    if (!isDragging &&
+                                    (Math.abs(event.rawX - downX) > 10 ||
+                                            Math.abs(event.rawY - downY) > 10)
+                    )
+                            isDragging = true
                     if (isDragging) {
                         lp.x += (event.rawX - lastX).toInt()
                         lp.y += (event.rawY - lastY).toInt()
                         runCatching { wm.updateViewLayout(this, lp) }
-                        lastX = event.rawX; lastY = event.rawY
+                        lastX = event.rawX
+                        lastY = event.rawY
                     }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    isDragging = false; return true
+                    isDragging = false
+                    return true
                 }
             }
             return super.onTouchEvent(event)
         }
 
-        private fun dp(v: Int): Int = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), context.resources.displayMetrics).toInt()
+        private fun dp(v: Int): Int =
+                TypedValue.applyDimension(
+                                TypedValue.COMPLEX_UNIT_DIP,
+                                v.toFloat(),
+                                context.resources.displayMetrics
+                        )
+                        .toInt()
     }
 
     // ═══════════════════════════════════════════════════════
@@ -430,12 +496,15 @@ object VirtualScreenPreviewOverlay {
 
         // 拖拽
         private var isDragging = false
-        private var lastTouchX = 0f; private var lastTouchY = 0f
-        private var downX = 0f; private var downY = 0f
+        private var lastTouchX = 0f
+        private var lastTouchY = 0f
+        private var downX = 0f
+        private var downY = 0f
 
         // 触摸注入状态
         private var touchDownTime = 0L
-        private var touchDownX = 0f; private var touchDownY = 0f
+        private var touchDownX = 0f
+        private var touchDownY = 0f
         private var isTouchInjecting = false
         private val LONG_PRESS_THRESHOLD_MS = 450L
         private val TAP_SLOP_PX = 15
@@ -444,13 +513,18 @@ object VirtualScreenPreviewOverlay {
         var onTextureAvailable: ((SurfaceTexture) -> Unit)? = null
         var onTextureDestroyed: (() -> Unit)? = null
 
-        init { buildViews() }
-
-        fun attachWindowManager(wm: WindowManager, lp: WindowManager.LayoutParams) {
-            currentWm = wm; currentLp = lp
+        init {
+            buildViews()
         }
 
-        fun setStatusText(text: String) { statusTextView?.text = text }
+        fun attachWindowManager(wm: WindowManager, lp: WindowManager.LayoutParams) {
+            currentWm = wm
+            currentLp = lp
+        }
+
+        fun setStatusText(text: String) {
+            statusTextView?.text = text
+        }
 
         fun refreshPauseButton(paused: Boolean) {
             pauseBtn?.text = if (paused) "▶ 继续" else "⏸ 暂停"
@@ -469,52 +543,70 @@ object VirtualScreenPreviewOverlay {
             elevation = dp(8).toFloat()
 
             // === 标题栏 ===
-            val header = FrameLayout(context).apply {
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dp(HEADER_HEIGHT_DP))
-                setBackgroundColor(Color.argb(200, 50, 50, 60))
-            }
+            val header =
+                    FrameLayout(context).apply {
+                        layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dp(HEADER_HEIGHT_DP))
+                        setBackgroundColor(Color.argb(200, 50, 50, 60))
+                    }
 
-            header.addView(TextView(context).apply {
-                text = "虚拟屏预览"
-                setTextColor(Color.WHITE)
-                textSize = 11f
-                layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-                    gravity = Gravity.CENTER_VERTICAL or Gravity.START; marginStart = dp(8)
-                }
-            })
+            header.addView(
+                    TextView(context).apply {
+                        text = "虚拟屏预览"
+                        setTextColor(Color.WHITE)
+                        textSize = 11f
+                        layoutParams =
+                                LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
+                                        .apply {
+                                            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                                            marginStart = dp(8)
+                                        }
+                    }
+            )
 
             // 右上角 - → 最小化到后台，显示后台操作进度悬浮窗
-            header.addView(TextView(context).apply {
-                text = "－"
-                setTextColor(Color.argb(200, 255, 255, 255))
-                textSize = 16f
-                gravity = Gravity.CENTER
-                layoutParams = LayoutParams(dp(28), LayoutParams.MATCH_PARENT).apply {
-                    gravity = Gravity.CENTER_VERTICAL or Gravity.END
-                }
-                setOnClickListener { minimize(context) }
-            })
+            header.addView(
+                    TextView(context).apply {
+                        text = "－"
+                        setTextColor(Color.argb(200, 255, 255, 255))
+                        textSize = 16f
+                        gravity = Gravity.CENTER
+                        layoutParams =
+                                LayoutParams(dp(28), LayoutParams.MATCH_PARENT).apply {
+                                    gravity = Gravity.CENTER_VERTICAL or Gravity.END
+                                }
+                        setOnClickListener { minimize(context) }
+                    }
+            )
             addView(header)
 
             // === TextureView 画面区域（支持触摸注入到虚拟屏） ===
-            val tv = TextureView(context).apply {
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
-                    topMargin = dp(HEADER_HEIGHT_DP)
-                    bottomMargin = dp(CONTROL_BAR_HEIGHT_DP)
-                }
-                isOpaque = false
-            }
-            tv.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-                    Log.i(TAG, "TextureView available: ${w}x${h}")
-                    onTextureAvailable?.invoke(st)
-                }
-                override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
-                    onTextureDestroyed?.invoke(); return true
-                }
-                override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-            }
+            val tv =
+                    TextureView(context).apply {
+                        layoutParams =
+                                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
+                                        .apply {
+                                            topMargin = dp(HEADER_HEIGHT_DP)
+                                            bottomMargin = dp(CONTROL_BAR_HEIGHT_DP)
+                                        }
+                        isOpaque = false
+                    }
+            tv.surfaceTextureListener =
+                    object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                            Log.i(TAG, "TextureView available: ${w}x${h}")
+                            onTextureAvailable?.invoke(st)
+                        }
+                        override fun onSurfaceTextureSizeChanged(
+                                st: SurfaceTexture,
+                                w: Int,
+                                h: Int
+                        ) {}
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                            onTextureDestroyed?.invoke()
+                            return true
+                        }
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                    }
             // 触摸注入：将预览窗触摸映射到虚拟屏坐标并注入
             tv.setOnTouchListener { view, event ->
                 val did = VirtualDisplayController.getDisplayId() ?: return@setOnTouchListener false
@@ -531,18 +623,39 @@ object VirtualScreenPreviewOverlay {
                         touchDownX = event.x
                         touchDownY = event.y
                         isTouchInjecting = true
-                        InputHelper.enqueueTouch(did, touchDownTime, MotionEvent.ACTION_DOWN, vx, vy, ensureFocus = true)
+                        InputHelper.enqueueTouch(
+                                did,
+                                touchDownTime,
+                                MotionEvent.ACTION_DOWN,
+                                vx,
+                                vy,
+                                ensureFocus = true
+                        )
                         true
                     }
                     MotionEvent.ACTION_MOVE -> {
                         if (isTouchInjecting) {
-                            InputHelper.enqueueTouch(did, touchDownTime, MotionEvent.ACTION_MOVE, vx, vy, ensureFocus = false)
+                            InputHelper.enqueueTouch(
+                                    did,
+                                    touchDownTime,
+                                    MotionEvent.ACTION_MOVE,
+                                    vx,
+                                    vy,
+                                    ensureFocus = false
+                            )
                         }
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         if (isTouchInjecting) {
-                            InputHelper.enqueueTouch(did, touchDownTime, MotionEvent.ACTION_UP, vx, vy, ensureFocus = false)
+                            InputHelper.enqueueTouch(
+                                    did,
+                                    touchDownTime,
+                                    MotionEvent.ACTION_UP,
+                                    vx,
+                                    vy,
+                                    ensureFocus = false
+                            )
                             isTouchInjecting = false
                         }
                         true
@@ -554,29 +667,34 @@ object VirtualScreenPreviewOverlay {
             addView(tv)
 
             // === 状态条（悬浮在画面底部上方） ===
-            val statusTv = TextView(context).apply {
-                text = "执行中..."
-                setTextColor(Color.argb(200, 200, 200, 200))
-                textSize = 10f
-                setBackgroundColor(Color.argb(120, 0, 0, 0))
-                setPadding(dp(6), dp(2), dp(6), dp(2))
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-                    gravity = Gravity.BOTTOM; bottomMargin = dp(CONTROL_BAR_HEIGHT_DP)
-                }
-            }
+            val statusTv =
+                    TextView(context).apply {
+                        text = "执行中..."
+                        setTextColor(Color.argb(200, 200, 200, 200))
+                        textSize = 10f
+                        setBackgroundColor(Color.argb(120, 0, 0, 0))
+                        setPadding(dp(6), dp(2), dp(6), dp(2))
+                        layoutParams =
+                                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+                                        .apply {
+                                            gravity = Gravity.BOTTOM
+                                            bottomMargin = dp(CONTROL_BAR_HEIGHT_DP)
+                                        }
+                    }
             statusTextView = statusTv
             addView(statusTv)
 
             // === 底部控制栏 ===
-            val controlBar = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setBackgroundColor(Color.argb(220, 40, 40, 50))
-                layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dp(CONTROL_BAR_HEIGHT_DP)).apply {
-                    gravity = Gravity.BOTTOM
-                }
-                setPadding(dp(4), 0, dp(4), 0)
-            }
+            val controlBar =
+                    LinearLayout(context).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setBackgroundColor(Color.argb(220, 40, 40, 50))
+                        layoutParams =
+                                LayoutParams(LayoutParams.MATCH_PARENT, dp(CONTROL_BAR_HEIGHT_DP))
+                                        .apply { gravity = Gravity.BOTTOM }
+                        setPadding(dp(4), 0, dp(4), 0)
+                    }
 
             // 控制按钮辅助函数
             fun makeCtrlBtn(label: String, flex: Float = 1f, onClick: () -> Unit): TextView {
@@ -585,47 +703,62 @@ object VirtualScreenPreviewOverlay {
                     setTextColor(Color.WHITE)
                     textSize = 10f
                     gravity = Gravity.CENTER
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, flex)
+                    layoutParams =
+                            LinearLayout.LayoutParams(
+                                    0,
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    flex
+                            )
                     setOnClickListener { onClick() }
                     isClickable = true
                     isFocusable = true
-                    val pressedBg = GradientDrawable().apply {
-                        cornerRadius = dp(4).toFloat()
-                        setColor(Color.argb(60, 255, 255, 255))
-                    }
+                    val pressedBg =
+                            GradientDrawable().apply {
+                                cornerRadius = dp(4).toFloat()
+                                setColor(Color.argb(60, 255, 255, 255))
+                            }
                     background = pressedBg
                 }
             }
 
             // 1. 虚拟返回
-            controlBar.addView(makeCtrlBtn("◀ 返回") {
-                val did = VirtualDisplayController.getDisplayId() ?: return@makeCtrlBtn
-                VirtualDisplayController.injectBackBestEffort(did)
-            })
+            controlBar.addView(
+                    makeCtrlBtn("◀ 返回") {
+                        val did = VirtualDisplayController.getDisplayId() ?: return@makeCtrlBtn
+                        VirtualDisplayController.injectBackBestEffort(did)
+                    }
+            )
 
             // 2. 虚拟 Home
-            controlBar.addView(makeCtrlBtn("● Home") {
-                val did = VirtualDisplayController.getDisplayId() ?: return@makeCtrlBtn
-                VirtualDisplayController.injectHomeBestEffort(did)
-            })
+            controlBar.addView(
+                    makeCtrlBtn("● Home") {
+                        val did = VirtualDisplayController.getDisplayId() ?: return@makeCtrlBtn
+                        VirtualDisplayController.injectHomeBestEffort(did)
+                    }
+            )
 
             // 3. 暂停 / 继续
-            val pBtn = makeCtrlBtn("⏸ 暂停") {
-                val ctx = context.applicationContext
-                val intent = Intent(ACTION_PAUSE_TOGGLE).apply { setPackage(ctx.packageName) }
-                runCatching { ctx.sendBroadcast(intent) }
-            }
+            val pBtn =
+                    makeCtrlBtn("⏸ 暂停") {
+                        val ctx = context.applicationContext
+                        val intent =
+                                Intent(ACTION_PAUSE_TOGGLE).apply { setPackage(ctx.packageName) }
+                        runCatching { ctx.sendBroadcast(intent) }
+                    }
             pauseBtn = pBtn
             controlBar.addView(pBtn)
 
             // 4. 停止任务
-            controlBar.addView(makeCtrlBtn("⏹ 停止") {
-                val ctx = context.applicationContext
-                VirtualDisplayController.cleanupAsync(ctx)
-                hide()
-                val intent = Intent(ACTION_STOP_AUTOMATION).apply { setPackage(ctx.packageName) }
-                runCatching { ctx.sendBroadcast(intent) }
-            })
+            controlBar.addView(
+                    makeCtrlBtn("⏹ 停止") {
+                        val ctx = context.applicationContext
+                        VirtualDisplayController.cleanupAsync(ctx)
+                        hide()
+                        val intent =
+                                Intent(ACTION_STOP_AUTOMATION).apply { setPackage(ctx.packageName) }
+                        runCatching { ctx.sendBroadcast(intent) }
+                    }
+            )
 
             addView(controlBar)
         }
@@ -638,15 +771,20 @@ object VirtualScreenPreviewOverlay {
                 when (ev.action) {
                     MotionEvent.ACTION_DOWN -> {
                         isDragging = false
-                        downX = ev.rawX; downY = ev.rawY
-                        lastTouchX = ev.rawX; lastTouchY = ev.rawY
-                        return false  // 不拦截 DOWN，让子 View（如最小化按钮）接收
+                        downX = ev.rawX
+                        downY = ev.rawY
+                        lastTouchX = ev.rawX
+                        lastTouchY = ev.rawY
+                        return false // 不拦截 DOWN，让子 View（如最小化按钮）接收
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        if (!isDragging && (Math.abs(ev.rawX - downX) > 10 || Math.abs(ev.rawY - downY) > 10)) {
+                        if (!isDragging &&
+                                        (Math.abs(ev.rawX - downX) > 10 ||
+                                                Math.abs(ev.rawY - downY) > 10)
+                        ) {
                             isDragging = true
                         }
-                        return isDragging  // 仅拖拽时拦截
+                        return isDragging // 仅拖拽时拦截
                     }
                 }
             }
@@ -658,25 +796,42 @@ object VirtualScreenPreviewOverlay {
             val wm = currentWm ?: return super.onTouchEvent(event)
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    isDragging = false; downX = event.rawX; downY = event.rawY
-                    lastTouchX = event.rawX; lastTouchY = event.rawY; return true
+                    isDragging = false
+                    downX = event.rawX
+                    downY = event.rawY
+                    lastTouchX = event.rawX
+                    lastTouchY = event.rawY
+                    return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!isDragging && (Math.abs(event.rawX - downX) > 10 || Math.abs(event.rawY - downY) > 10)) isDragging = true
+                    if (!isDragging &&
+                                    (Math.abs(event.rawX - downX) > 10 ||
+                                            Math.abs(event.rawY - downY) > 10)
+                    )
+                            isDragging = true
                     if (isDragging) {
                         lp.x += (event.rawX - lastTouchX).toInt()
                         lp.y += (event.rawY - lastTouchY).toInt()
                         runCatching { wm.updateViewLayout(this, lp) }
-                        lastTouchX = event.rawX; lastTouchY = event.rawY
+                        lastTouchX = event.rawX
+                        lastTouchY = event.rawY
                     }
                     return true
                 }
-                MotionEvent.ACTION_UP -> { isDragging = false; return true }
+                MotionEvent.ACTION_UP -> {
+                    isDragging = false
+                    return true
+                }
             }
             return super.onTouchEvent(event)
         }
 
-        private fun dp(v: Int): Int = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), context.resources.displayMetrics).toInt()
+        private fun dp(v: Int): Int =
+                TypedValue.applyDimension(
+                                TypedValue.COMPLEX_UNIT_DIP,
+                                v.toFloat(),
+                                context.resources.displayMetrics
+                        )
+                        .toInt()
     }
 }

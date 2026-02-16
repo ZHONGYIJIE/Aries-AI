@@ -18,6 +18,8 @@
 package com.ai.phoneagent
 
 import android.Manifest
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -25,8 +27,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.animation.ObjectAnimator
-import android.animation.PropertyValuesHolder
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -39,18 +39,17 @@ import android.view.View
 import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.EditText
-import android.widget.ImageButton
 import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.widget.NestedScrollView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.widget.NestedScrollView
 import androidx.lifecycle.lifecycleScope
 import com.ai.phoneagent.core.config.AgentConfiguration
 import com.ai.phoneagent.core.tools.AIToolHandler
@@ -67,9 +66,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
-/**
- * 自动化Activity - 使用新的Agent系统
- */
+/** 自动化Activity - 使用新的Agent系统 */
 class AutomationActivityNew : AppCompatActivity() {
 
     companion object {
@@ -96,7 +93,7 @@ class AutomationActivityNew : AppCompatActivity() {
     private lateinit var rgExecutionMode: RadioGroup
     private lateinit var tvModeDescription: TextView
     private lateinit var tvVirtualDisplayStatus: TextView
-    private var isBackgroundMode: Boolean = false  // true = 后台虚拟屏模式, false = 前端执行模式
+    private var isBackgroundMode: Boolean = false // true = 后台虚拟屏模式, false = 前端执行模式
 
     private var sherpaSpeechRecognizer: SherpaSpeechRecognizer? = null
     private var isListening: Boolean = false
@@ -118,31 +115,34 @@ class AutomationActivityNew : AppCompatActivity() {
     private val KEY_LAST_RESULT_TIME = "last_result_time"
     private val KEY_LAST_LOG = "last_log"
 
-    private val stopFromOverlayReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == VirtualScreenPreviewOverlay.ACTION_STOP_AUTOMATION) {
-                appendLog("[虚拟屏] 收到关闭请求，正在停止任务并清理虚拟屏…")
-                handleStopFromOverlay()
+    private val stopFromOverlayReceiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action == VirtualScreenPreviewOverlay.ACTION_STOP_AUTOMATION) {
+                        appendLog("[虚拟屏] 收到关闭请求，正在停止任务并清理虚拟屏…")
+                        handleStopFromOverlay()
+                    }
+                }
             }
-        }
-    }
 
-    private val pauseToggleReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == VirtualScreenPreviewOverlay.ACTION_PAUSE_TOGGLE) {
-                togglePause()
+    private val pauseToggleReceiver =
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action == VirtualScreenPreviewOverlay.ACTION_PAUSE_TOGGLE) {
+                        togglePause()
+                    }
+                }
             }
-        }
-    }
-    
+
     // 推荐语句滚动相关
     private lateinit var tvRecommendTask: TextView
-     private var recommendJob: Job? = null
-    private val recommendTasks = listOf(
-        "打开大众点评帮我预订一个明天中午11点的周围火锅店的位置，4个人",
-        "打开12306订一张2月5日南京到北京的票，选最便宜的",
-        "打开航旅纵横订一张2月5日从南京飞往成都的机票"
-    )
+    private var recommendJob: Job? = null
+    private val recommendTasks =
+            listOf(
+                    "打开大众点评帮我预订一个明天中午11点的周围火锅店的位置，4个人",
+                    "打开12306订一张2月5日南京到北京的票，选最便宜的",
+                    "打开航旅纵横订一张2月5日从南京飞往成都的机票"
+            )
     private var currentRecommendIndex = 0
 
     private val serviceId by lazy {
@@ -174,7 +174,8 @@ class AutomationActivityNew : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            WindowCompat.getInsetsController(window, binding.root).isAppearanceLightStatusBars = true
+            WindowCompat.getInsetsController(window, binding.root).isAppearanceLightStatusBars =
+                    true
         }
 
         val initialTop = binding.root.paddingTop
@@ -183,52 +184,61 @@ class AutomationActivityNew : AppCompatActivity() {
             val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val bottomInset = if (ime.bottom > sys.bottom) ime.bottom else sys.bottom
-            
+
             // 将 top inset 应用到 AppBar
             binding.appBar.setPadding(0, sys.top, 0, 0)
-            
-            v.setPadding(
-                v.paddingLeft,
-                initialTop,
-                v.paddingRight,
-                initialBottom + bottomInset
-            )
+
+            v.setPadding(v.paddingLeft, initialTop, v.paddingRight, initialBottom + bottomInset)
             insets
         }
         ViewCompat.requestApplyInsets(binding.root)
 
         // 绑定UI组件 - 带null检查和异常处理
         try {
-            tvAccStatus = binding.root.findViewById(R.id.tvAccStatus) 
-                ?: throw NullPointerException("tvAccStatus not found")
-            statusIndicator = binding.root.findViewById(R.id.statusIndicator)
-                ?: throw NullPointerException("statusIndicator not found")
-            tvLog = binding.root.findViewById(R.id.tvLog)
-                ?: throw NullPointerException("tvLog not found")
-            etTask = binding.root.findViewById(R.id.etTask)
-                ?: throw NullPointerException("etTask not found")
-            btnVoiceTask = binding.root.findViewById(R.id.btnVoiceTask)
-                ?: throw NullPointerException("btnVoiceTask not found")
-            btnOpenAccessibility = binding.root.findViewById(R.id.btnOpenAccessibility)
-                ?: throw NullPointerException("btnOpenAccessibility not found")
-            btnRefreshAccessibility = binding.root.findViewById(R.id.btnRefreshAccessibility)
-                ?: throw NullPointerException("btnRefreshAccessibility not found")
-            btnStartAgent = binding.root.findViewById(R.id.btnStartAgent)
-                ?: throw NullPointerException("btnStartAgent not found")
-            btnPauseAgent = binding.root.findViewById(R.id.btnPauseAgent)
-                ?: throw NullPointerException("btnPauseAgent not found")
-            btnStopAgent = binding.root.findViewById(R.id.btnStopAgent)
-                ?: throw NullPointerException("btnStopAgent not found")
-            tvRecommendTask = binding.root.findViewById(R.id.tvRecommendTask)
-                ?: throw NullPointerException("tvRecommendTask not found")
+            tvAccStatus =
+                    binding.root.findViewById(R.id.tvAccStatus)
+                            ?: throw NullPointerException("tvAccStatus not found")
+            statusIndicator =
+                    binding.root.findViewById(R.id.statusIndicator)
+                            ?: throw NullPointerException("statusIndicator not found")
+            tvLog =
+                    binding.root.findViewById(R.id.tvLog)
+                            ?: throw NullPointerException("tvLog not found")
+            etTask =
+                    binding.root.findViewById(R.id.etTask)
+                            ?: throw NullPointerException("etTask not found")
+            btnVoiceTask =
+                    binding.root.findViewById(R.id.btnVoiceTask)
+                            ?: throw NullPointerException("btnVoiceTask not found")
+            btnOpenAccessibility =
+                    binding.root.findViewById(R.id.btnOpenAccessibility)
+                            ?: throw NullPointerException("btnOpenAccessibility not found")
+            btnRefreshAccessibility =
+                    binding.root.findViewById(R.id.btnRefreshAccessibility)
+                            ?: throw NullPointerException("btnRefreshAccessibility not found")
+            btnStartAgent =
+                    binding.root.findViewById(R.id.btnStartAgent)
+                            ?: throw NullPointerException("btnStartAgent not found")
+            btnPauseAgent =
+                    binding.root.findViewById(R.id.btnPauseAgent)
+                            ?: throw NullPointerException("btnPauseAgent not found")
+            btnStopAgent =
+                    binding.root.findViewById(R.id.btnStopAgent)
+                            ?: throw NullPointerException("btnStopAgent not found")
+            tvRecommendTask =
+                    binding.root.findViewById(R.id.tvRecommendTask)
+                            ?: throw NullPointerException("tvRecommendTask not found")
 
             // 执行模式选择
-            rgExecutionMode = binding.root.findViewById(R.id.rgExecutionMode)
-                ?: throw NullPointerException("rgExecutionMode not found")
-            tvModeDescription = binding.root.findViewById(R.id.tvModeDescription)
-                ?: throw NullPointerException("tvModeDescription not found")
-            tvVirtualDisplayStatus = binding.root.findViewById(R.id.tvVirtualDisplayStatus)
-                ?: throw NullPointerException("tvVirtualDisplayStatus not found")
+            rgExecutionMode =
+                    binding.root.findViewById(R.id.rgExecutionMode)
+                            ?: throw NullPointerException("rgExecutionMode not found")
+            tvModeDescription =
+                    binding.root.findViewById(R.id.tvModeDescription)
+                            ?: throw NullPointerException("tvModeDescription not found")
+            tvVirtualDisplayStatus =
+                    binding.root.findViewById(R.id.tvVirtualDisplayStatus)
+                            ?: throw NullPointerException("tvVirtualDisplayStatus not found")
         } catch (e: NullPointerException) {
             Log.e("AutomationActivityNew", "UI组件初始化失败: ${e.message}", e)
             Toast.makeText(this, "应用初始化失败: ${e.message}", Toast.LENGTH_LONG).show()
@@ -241,7 +251,7 @@ class AutomationActivityNew : AppCompatActivity() {
         }
 
         setupLogAutoScrollBehavior()
-        
+
         // 初始化虚拟屏状态显示
         // 恢复上次保存的执行模式
         val savedUseVd = VirtualDisplayConfig.getUseVirtualDisplay(this)
@@ -255,7 +265,7 @@ class AutomationActivityNew : AppCompatActivity() {
             VirtualDisplayController.setShouldUseVirtualDisplay(false)
         }
         updateVirtualDisplayStatus()
-        
+
         rgExecutionMode.setOnCheckedChangeListener { _, checkedId ->
             when (checkedId) {
                 R.id.rbFrontMode -> {
@@ -368,9 +378,7 @@ class AutomationActivityNew : AppCompatActivity() {
         restoreLastRunResult()
     }
 
-    /**
-     * 保存运行结果到本地
-     */
+    /** 保存运行结果到本地 */
     private fun saveRunResult(success: Boolean, message: String, steps: Int, logText: String) {
         try {
             val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -387,9 +395,7 @@ class AutomationActivityNew : AppCompatActivity() {
         }
     }
 
-    /**
-     * 恢复上一次运行结果
-     */
+    /** 恢复上一次运行结果 */
     private fun restoreLastRunResult() {
         try {
             val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -401,8 +407,9 @@ class AutomationActivityNew : AppCompatActivity() {
 
             // 只显示24小时内的结果
             if (time > 0 && System.currentTimeMillis() - time < 24 * 60 * 60 * 1000) {
-                val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                    .format(java.util.Date(time))
+                val timeStr =
+                        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                                .format(java.util.Date(time))
                 val statusText = if (success) "✅ 成功" else "❌ 失败"
                 appendLog("\n=== 上一次运行结果 ($timeStr) ===")
                 appendLog("状态: $statusText")
@@ -419,9 +426,7 @@ class AutomationActivityNew : AppCompatActivity() {
         }
     }
 
-    /**
-     * 清除保存的运行结果
-     */
+    /** 清除保存的运行结果 */
     private fun clearLastRunResult() {
         try {
             val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -431,9 +436,7 @@ class AutomationActivityNew : AppCompatActivity() {
         }
     }
 
-    /**
-     * 初始化工具系统
-     */
+    /** 初始化工具系统 */
     private fun initializeToolSystem() {
         try {
             val toolHandler = AIToolHandler.getInstance(this)
@@ -445,28 +448,27 @@ class AutomationActivityNew : AppCompatActivity() {
         }
     }
 
-    /**
-     * 检查无障碍服务状态
-     */
+    /** 检查无障碍服务状态 */
     private fun checkAccessibilityStatus() {
         try {
             val enabled = isAccessibilityServiceEnabled()
             val connected = PhoneAgentAccessibilityService.instance != null
-            
-            tvAccStatus?.text = when {
-                !enabled -> "服务未开启：请前往设置"
-                !connected -> "服务已开启：正在连接..."
-                else -> "已就绪：无障碍连接正常"
-            }
-            
+
+            tvAccStatus?.text =
+                    when {
+                        !enabled -> "服务未开启：请前往设置"
+                        !connected -> "服务已开启：正在连接..."
+                        else -> "已就绪：无障碍连接正常"
+                    }
+
             statusIndicator?.setBackgroundResource(
-                when {
-                    !enabled -> R.drawable.bg_circle_red
-                    !connected -> R.drawable.bg_circle_yellow
-                    else -> R.drawable.bg_circle_green
-                }
+                    when {
+                        !enabled -> R.drawable.bg_circle_red
+                        !connected -> R.drawable.bg_circle_yellow
+                        else -> R.drawable.bg_circle_green
+                    }
             )
-            
+
             // 无障碍权限未开启时，显示提示
             if (!enabled) {
                 etTask?.hint = "请打开无障碍服务"
@@ -475,7 +477,7 @@ class AutomationActivityNew : AppCompatActivity() {
                 etTask?.hint = "在此输入或录入您的任务指令..."
                 etTask?.isEnabled = true
             }
-            
+
             btnOpenAccessibility?.visibility = if (enabled) View.GONE else View.VISIBLE
             btnStartAgent?.isEnabled = enabled
         } catch (e: Exception) {
@@ -483,16 +485,15 @@ class AutomationActivityNew : AppCompatActivity() {
         }
     }
 
-    /**
-     * 判断无障碍服务是否启用
-     */
+    /** 判断无障碍服务是否启用 */
     private fun isAccessibilityServiceEnabled(): Boolean {
         var enabled = false
         try {
-            val string = Settings.Secure.getString(
-                contentResolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-            )
+            val string =
+                    Settings.Secure.getString(
+                            contentResolver,
+                            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                    )
             if (!string.isNullOrEmpty()) {
                 enabled = string.contains(serviceId)
             }
@@ -502,9 +503,7 @@ class AutomationActivityNew : AppCompatActivity() {
         return enabled
     }
 
-    /**
-     * 启动Agent
-     */
+    /** 启动Agent */
     private fun startAgent() {
         if (agentJob != null) return
 
@@ -550,9 +549,7 @@ class AutomationActivityNew : AppCompatActivity() {
                     )
             if (ok) {
                 // 延迟一点让动画播放
-                window.decorView.postDelayed({
-                    moveTaskToBack(true)
-                }, 100)
+                window.decorView.postDelayed({ moveTaskToBack(true) }, 100)
             } else {
                 Toast.makeText(this, "悬浮窗显示失败，将保持前台显示日志", Toast.LENGTH_SHORT).show()
             }
@@ -569,15 +566,16 @@ class AutomationActivityNew : AppCompatActivity() {
         agentJob =
                 lifecycleScope.launch {
                     try {
-                        val config = AgentConfiguration(useBackgroundVirtualDisplay = isBackgroundMode)
-                        
+                        val config =
+                                AgentConfiguration(useBackgroundVirtualDisplay = isBackgroundMode)
+
                         // 更新虚拟屏状态显示
                         runOnUiThread {
                             if (isBackgroundMode) {
                                 tvVirtualDisplayStatus.text = "虚拟屏状态: 正在创建..."
                             }
                         }
-                        
+
                         val agent = UiAutomationAgent(config)
                         val result =
                                 agent.run(
@@ -600,12 +598,26 @@ class AutomationActivityNew : AppCompatActivity() {
                                                                                 )
                                                                                 .setTitle("需要确认")
                                                                                 .setMessage(message)
-                                                                                .setCancelable(false)
-                                                                                .setPositiveButton("确认") { _, _ ->
-                                                                                    if (cont.isActive) cont.resume(true)
+                                                                                .setCancelable(
+                                                                                        false
+                                                                                )
+                                                                                .setPositiveButton(
+                                                                                        "确认"
+                                                                                ) { _, _ ->
+                                                                                    if (cont.isActive
+                                                                                    )
+                                                                                            cont.resume(
+                                                                                                    true
+                                                                                            )
                                                                                 }
-                                                                                .setNegativeButton("拒绝") { _, _ ->
-                                                                                    if (cont.isActive) cont.resume(false)
+                                                                                .setNegativeButton(
+                                                                                        "拒绝"
+                                                                                ) { _, _ ->
+                                                                                    if (cont.isActive
+                                                                                    )
+                                                                                            cont.resume(
+                                                                                                    false
+                                                                                            )
                                                                                 }
                                                                                 .create()
                                                                 dialog.show()
@@ -616,19 +628,24 @@ class AutomationActivityNew : AppCompatActivity() {
                                                         }
                                                     }
                                                 },
-                                        onLog = { msg -> 
+                                        onLog = { msg ->
                                             appendLog(msg)
-                                            
+
                                             // 检测虚拟屏状态并更新 UI
                                             if (isBackgroundMode) {
                                                 runOnUiThread {
                                                     when {
                                                         msg.contains("虚拟屏已准备就绪") -> {
-                                                            val displayId = VirtualDisplayController.getDisplayId()
-                                                            tvVirtualDisplayStatus.text = "虚拟屏状态: 已启动 (displayId=$displayId)"
+                                                            val displayId =
+                                                                    VirtualDisplayController
+                                                                            .getDisplayId()
+                                                            tvVirtualDisplayStatus.text =
+                                                                    "虚拟屏状态: 已启动 (displayId=$displayId)"
                                                         }
-                                                        msg.contains("虚拟屏准备失败") || msg.contains("虚拟屏模式启动失败") -> {
-                                                            tvVirtualDisplayStatus.text = "虚拟屏状态: 创建失败"
+                                                        msg.contains("虚拟屏准备失败") ||
+                                                                msg.contains("虚拟屏模式启动失败") -> {
+                                                            tvVirtualDisplayStatus.text =
+                                                                    "虚拟屏状态: 创建失败"
                                                         }
                                                     }
                                                 }
@@ -637,7 +654,7 @@ class AutomationActivityNew : AppCompatActivity() {
                                 )
                         appendLog("结束：${result.message}（steps=${result.steps}）")
                         AutomationOverlay.complete(result.message)
-                        
+
                         // 保存运行结果
                         val logText = tvLog.text?.toString() ?: ""
                         saveRunResult(result.success, result.message, result.steps, logText)
@@ -674,18 +691,17 @@ class AutomationActivityNew : AppCompatActivity() {
         // 运行期间周期刷新虚拟屏状态
         if (isBackgroundMode) {
             virtualDisplayStatusJob?.cancel()
-            virtualDisplayStatusJob = lifecycleScope.launch {
-                while (agentJob != null) {
-                    updateVirtualDisplayStatus()
-                    delay(1000L)
-                }
-            }
+            virtualDisplayStatusJob =
+                    lifecycleScope.launch {
+                        while (agentJob != null) {
+                            updateVirtualDisplayStatus()
+                            delay(1000L)
+                        }
+                    }
         }
     }
 
-    /**
-     * 停止Agent
-     */
+    /** 停止Agent */
     private fun stopAgent() {
         val job = agentJob
         if (job != null) {
@@ -703,16 +719,17 @@ class AutomationActivityNew : AppCompatActivity() {
         VirtualScreenPreviewOverlay.hide()
         virtualDisplayStatusJob?.cancel()
         virtualDisplayStatusJob = null
-        if (isBackgroundMode || VirtualDisplayController.shouldUseVirtualDisplay || VirtualDisplayController.isVirtualDisplayStarted()) {
+        if (isBackgroundMode ||
+                        VirtualDisplayController.shouldUseVirtualDisplay ||
+                        VirtualDisplayController.isVirtualDisplayStarted()
+        ) {
             VirtualDisplayController.cleanupAsync(this)
             updateVirtualDisplayStatus()
         }
     }
 
     private fun handleStopFromOverlay() {
-        runOnUiThread {
-            stopAgent()
-        }
+        runOnUiThread { stopAgent() }
     }
 
     private fun togglePause() {
@@ -731,7 +748,7 @@ class AutomationActivityNew : AppCompatActivity() {
                 if (isDestroyed || isFinishing) {
                     return@launch
                 }
-                
+
                 sherpaSpeechRecognizer = SherpaSpeechRecognizer(this@AutomationActivityNew)
                 val success = sherpaSpeechRecognizer?.initialize() == true
                 if (!success) {
@@ -739,10 +756,11 @@ class AutomationActivityNew : AppCompatActivity() {
                         withContext(Dispatchers.Main) {
                             if (!isDestroyed && !isFinishing) {
                                 Toast.makeText(
-                                    this@AutomationActivityNew,
-                                    "语音模型初始化失败，请重试",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                                this@AutomationActivityNew,
+                                                "语音模型初始化失败，请重试",
+                                                Toast.LENGTH_LONG
+                                        )
+                                        .show()
                             }
                         }
                     }
@@ -754,10 +772,11 @@ class AutomationActivityNew : AppCompatActivity() {
                         withContext(Dispatchers.Main) {
                             if (!isDestroyed && !isFinishing) {
                                 Toast.makeText(
-                                    this@AutomationActivityNew,
-                                    "语音模型异常: ${e.message}",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                                this@AutomationActivityNew,
+                                                "语音模型异常: ${e.message}",
+                                                Toast.LENGTH_LONG
+                                        )
+                                        .show()
                             }
                         }
                     } catch (toastException: Exception) {
@@ -784,16 +803,17 @@ class AutomationActivityNew : AppCompatActivity() {
     private fun startVoiceInputAnimation() {
         voiceInputAnimJob?.cancel()
         savedTaskText = etTask.text?.toString().orEmpty()
-        voiceInputAnimJob = lifecycleScope.launch {
-            var dotCount = 1
-            while (true) {
-                val dots = ".".repeat(dotCount)
-                etTask.setText("正在语音输入$dots")
-                etTask.setSelection(etTask.text?.length ?: 0)
-                dotCount = if (dotCount >= 3) 1 else dotCount + 1
-                delay(400)
-            }
-        }
+        voiceInputAnimJob =
+                lifecycleScope.launch {
+                    var dotCount = 1
+                    while (true) {
+                        val dots = ".".repeat(dotCount)
+                        etTask.setText("正在语音输入$dots")
+                        etTask.setSelection(etTask.text?.length ?: 0)
+                        dotCount = if (dotCount >= 3) 1 else dotCount + 1
+                        delay(400)
+                    }
+                }
     }
 
     private fun stopVoiceInputAnimation() {
@@ -930,9 +950,7 @@ class AutomationActivityNew : AppCompatActivity() {
         btnVoiceTask.alpha = 1f
     }
 
-    /**
-     * 获取API Key
-     */
+    /** 获取API Key */
     private fun getApiKey(): String {
         // 从SharedPreferences读取
         val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
@@ -941,29 +959,23 @@ class AutomationActivityNew : AppCompatActivity() {
         return prefs.getString("autoglm_api_key", "") ?: ""
     }
 
-    /**
-     * 添加日志
-     */
+    /** 添加日志 */
     private fun appendLog(message: String) {
         runOnUiThread {
             tvLog.append("$message\n")
             AutomationOverlay.updateFromLogLine(message)
-            
+
             if (autoScrollLogToBottom) {
                 // 自动滚动到底部
                 val scrollView = binding.root.findViewById<NestedScrollView>(R.id.scrollLog)
-                scrollView?.post {
-                    scrollView.fullScroll(android.view.View.FOCUS_DOWN)
-                }
+                scrollView?.post { scrollView.fullScroll(android.view.View.FOCUS_DOWN) }
             }
         }
     }
 
     private fun scrollLogToTop() {
         val scrollView = binding.root.findViewById<NestedScrollView>(R.id.scrollLog)
-        scrollView?.post {
-            scrollView.fullScroll(android.view.View.FOCUS_UP)
-        }
+        scrollView?.post { scrollView.fullScroll(android.view.View.FOCUS_UP) }
     }
 
     private fun setupLogAutoScrollBehavior() {
@@ -979,12 +991,12 @@ class AutomationActivityNew : AppCompatActivity() {
 
     private fun updateVirtualDisplayStatus() {
         if (!::tvVirtualDisplayStatus.isInitialized) return
-        
+
         try {
             val isStarted = VirtualDisplayController.isVirtualDisplayStarted()
             val displayId = VirtualDisplayController.getDisplayId()
             val shouldUse = VirtualDisplayController.shouldUseVirtualDisplay
-            
+
             val statusText = buildString {
                 append("虚拟屏: ")
                 if (isStarted && displayId != null) {
@@ -1037,73 +1049,73 @@ class AutomationActivityNew : AppCompatActivity() {
                 .start()
     }
 
-    /**
-     * 轻微振动
-     */
+    /** 轻微振动 */
     private fun vibrateLight() {
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-            vibratorManager.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        }
+        val vibrator =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val vibratorManager =
+                            getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                    vibratorManager.defaultVibrator
+                } else {
+                    @Suppress("DEPRECATION") getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             vibrator.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
         } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(30)
+            @Suppress("DEPRECATION") vibrator.vibrate(30)
         }
     }
 
-    /**
-     * 启动推荐任务滚动播放
-     */
+    /** 启动推荐任务滚动播放 */
     private fun startRecommendTaskRotation() {
         if (recommendTasks.isEmpty()) return
-        
+
         try {
             // 初始显示第一条
             currentRecommendIndex = 0
             tvRecommendTask.text = recommendTasks[currentRecommendIndex]
-            
+
             // 启动协程，每4秒切换
             recommendJob?.cancel()
-            recommendJob = lifecycleScope.launch {
-                delay(4000) // 第一条显示4秒
-                while (true) {
-                    // 检查Activity是否已销毁
-                    if (isDestroyed) {
-                        break
-                    }
-                    
-                    currentRecommendIndex = (currentRecommendIndex + 1) % recommendTasks.size
-                    val nextText = recommendTasks[currentRecommendIndex]
-                    
-                    // 简单淡出淡入效果 - 添加null检查和安全防护
-                    try {
-                        tvRecommendTask.animate()
-                            .alpha(0.3f)
-                            .setDuration(200)
-                            .withEndAction {
-                                // 再次检查Activity状态
-                                if (!isDestroyed && !isFinishing) {
-                                    tvRecommendTask.text = nextText
-                                    tvRecommendTask.animate()
-                                        .alpha(0.65f)
-                                        .setDuration(200)
-                                        .start()
-                                }
+            recommendJob =
+                    lifecycleScope.launch {
+                        delay(4000) // 第一条显示4秒
+                        while (true) {
+                            // 检查Activity是否已销毁
+                            if (isDestroyed) {
+                                break
                             }
-                            .start()
-                    } catch (e: Exception) {
-                        Log.d("AutomationActivityNew", "推荐任务动画错误: ${e.message}")
+
+                            currentRecommendIndex =
+                                    (currentRecommendIndex + 1) % recommendTasks.size
+                            val nextText = recommendTasks[currentRecommendIndex]
+
+                            // 简单淡出淡入效果 - 添加null检查和安全防护
+                            try {
+                                tvRecommendTask
+                                        .animate()
+                                        .alpha(0.3f)
+                                        .setDuration(200)
+                                        .withEndAction {
+                                            // 再次检查Activity状态
+                                            if (!isDestroyed && !isFinishing) {
+                                                tvRecommendTask.text = nextText
+                                                tvRecommendTask
+                                                        .animate()
+                                                        .alpha(0.65f)
+                                                        .setDuration(200)
+                                                        .start()
+                                            }
+                                        }
+                                        .start()
+                            } catch (e: Exception) {
+                                Log.d("AutomationActivityNew", "推荐任务动画错误: ${e.message}")
+                            }
+
+                            delay(4000)
+                        }
                     }
-                    
-                    delay(4000)
-                }
-            }
         } catch (e: Exception) {
             Log.e("AutomationActivityNew", "推荐任务轮换启动失败: ${e.message}", e)
         }

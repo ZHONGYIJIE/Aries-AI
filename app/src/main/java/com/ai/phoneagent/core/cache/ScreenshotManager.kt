@@ -25,22 +25,19 @@ import kotlinx.coroutines.sync.withLock
 
 /**
  * 截图优化管理器 - 整合缓存+节流+压缩+虚拟屏支持
- * 
- * 提供统一的截图获取接口，集成缓存和节流功能
- * 支持虚拟屏模式（后台隔离执行）
+ *
+ * 提供统一的截图获取接口，集成缓存和节流功能 支持虚拟屏模式（后台隔离执行）
  */
-class ScreenshotManager(
-    private val config: AgentConfiguration = AgentConfiguration.DEFAULT
-) {
-    private val cache = ScreenshotCache(
-        maxSize = config.screenshotCacheMaxSize,
-        ttlMs = config.screenshotCacheTtlMs
-    )
-    private val throttler = ScreenshotThrottler(
-        minIntervalMs = config.screenshotThrottleMinIntervalMs
-    )
+class ScreenshotManager(private val config: AgentConfiguration = AgentConfiguration.DEFAULT) {
+    private val cache =
+            ScreenshotCache(
+                    maxSize = config.screenshotCacheMaxSize,
+                    ttlMs = config.screenshotCacheTtlMs
+            )
+    private val throttler =
+            ScreenshotThrottler(minIntervalMs = config.screenshotThrottleMinIntervalMs)
     private val mutex = Mutex()
-    
+
     /**
      * 优化的截图获取方法
      * 1. 检查是否启用虚拟屏模式，如是则使用虚拟屏截图
@@ -49,13 +46,13 @@ class ScreenshotManager(
      * 4. 执行截图并压缩优化
      */
     suspend fun getOptimizedScreenshot(
-        service: PhoneAgentAccessibilityService
+            service: PhoneAgentAccessibilityService
     ): PhoneAgentAccessibilityService.ScreenshotData? {
         // 优先检查虚拟屏模式
         if (config.useBackgroundVirtualDisplay) {
             return getVirtualDisplayScreenshot()
         }
-        
+
         // 检查节流器
         if (!throttler.canTakeScreenshot()) {
             val remainingWait = throttler.getRemainingWaitTime()
@@ -66,7 +63,7 @@ class ScreenshotManager(
             }
             return null
         }
-        
+
         // 检查缓存
         if (config.enableScreenshotCache) {
             val cached = getFromCache(service)
@@ -75,20 +72,18 @@ class ScreenshotManager(
                 return cached
             }
         }
-        
+
         // 执行截图
         val screenshot = service.tryCaptureScreenshotBase64()
         if (screenshot != null && config.enableScreenshotCache) {
             putToCache(service, screenshot)
             cache.evictExpired()
         }
-        
+
         return screenshot
     }
-    
-    /**
-     * 获取虚拟屏截图
-     */
+
+    /** 获取虚拟屏截图 */
     private fun getVirtualDisplayScreenshot(): PhoneAgentAccessibilityService.ScreenshotData? {
         return try {
             val b64 = VirtualDisplayController.screenshotPngBase64NonBlack()
@@ -96,9 +91,9 @@ class ScreenshotManager(
                 // 使用虚拟屏最新内容尺寸（与参考实现一致）
                 val (vw, vh) = VirtualDisplayController.getContentSizeBestEffort()
                 PhoneAgentAccessibilityService.ScreenshotData(
-                    base64Png = b64,
-                    width = vw,
-                    height = vh
+                        base64Png = b64,
+                        width = vw,
+                        height = vh
                 )
             } else {
                 null
@@ -107,40 +102,36 @@ class ScreenshotManager(
             null
         }
     }
-    
-    /**
-     * 从缓存获取截图
-     */
-    private fun getFromCache(service: PhoneAgentAccessibilityService): PhoneAgentAccessibilityService.ScreenshotData? {
+
+    /** 从缓存获取截图 */
+    private fun getFromCache(
+            service: PhoneAgentAccessibilityService
+    ): PhoneAgentAccessibilityService.ScreenshotData? {
         if (!config.enableScreenshotCache) return null
-        
+
         val currentApp = service.currentAppPackage()
         val windowEventTime = service.lastWindowEventTime()
         val cacheKey = cache.generateKey(currentApp, windowEventTime)
-        
+
         @Suppress("UNCHECKED_CAST")
         return cache.get(cacheKey) as? PhoneAgentAccessibilityService.ScreenshotData
     }
-    
-    /**
-     * 存储截图到缓存
-     */
+
+    /** 存储截图到缓存 */
     private fun putToCache(
-        service: PhoneAgentAccessibilityService,
-        screenshot: PhoneAgentAccessibilityService.ScreenshotData
+            service: PhoneAgentAccessibilityService,
+            screenshot: PhoneAgentAccessibilityService.ScreenshotData
     ) {
         if (!config.enableScreenshotCache) return
-        
+
         val currentApp = service.currentAppPackage()
         val windowEventTime = service.lastWindowEventTime()
         val cacheKey = cache.generateKey(currentApp, windowEventTime)
-        
+
         cache.put(cacheKey, screenshot)
     }
-    
-    /**
-     * 清理截图缓存（在任务开始/结束时调用）
-     */
+
+    /** 清理截图缓存（在任务开始/结束时调用） */
     suspend fun clear() {
         mutex.withLock {
             if (config.enableScreenshotCache) {
@@ -151,23 +142,17 @@ class ScreenshotManager(
             }
         }
     }
-    
-    /**
-     * 获取缓存状态
-     */
+
+    /** 获取缓存状态 */
     fun getCacheStatus(): Map<String, Any> {
         return mapOf(
-            "cacheStats" to cache.getStats(),
-            "throttleStatus" to throttler.getStatus(),
-            "config" to mapOf(
-                "cacheEnabled" to config.enableScreenshotCache,
-                "throttleEnabled" to config.enableScreenshotThrottle
-            )
+                "cacheStats" to cache.getStats(),
+                "throttleStatus" to throttler.getStatus(),
+                "config" to
+                        mapOf(
+                                "cacheEnabled" to config.enableScreenshotCache,
+                                "throttleEnabled" to config.enableScreenshotThrottle
+                        )
         )
     }
 }
-
-
-
-
-

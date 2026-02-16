@@ -17,11 +17,6 @@
  */
 package com.ai.phoneagent
 
-import android.accessibilityservice.AccessibilityService
-import com.ai.phoneagent.PhoneAgentAccessibilityService
-import com.ai.phoneagent.ShizukuBridge
-import com.ai.phoneagent.VirtualDisplayController
-import com.ai.phoneagent.VirtualScreenPreviewOverlay
 import com.ai.phoneagent.core.agent.ParsedAgentAction
 import com.ai.phoneagent.core.cache.ScreenshotManager
 import com.ai.phoneagent.core.config.AgentConfiguration
@@ -42,23 +37,21 @@ import kotlinx.coroutines.withContext
 
 /**
  * UiAutomationAgent - 重构后的主Agent
- * 
+ *
  * 使用清晰的分层架构：
  * - 配置层：AgentConfiguration
  * - 解析层：ActionParser
  * - 执行层：ActionExecutor
  * - 缓存层：ScreenshotManager
  * - 模板层：PromptTemplates
- * 
+ *
  * 职责：
  * 1. 协调各组件完成Agent流程
  * 2. 管理对话历史和上下文
  * 3. 处理模型调用和重试
  * 4. 管理任务状态和进度
  */
-class UiAutomationAgent(
-    private val config: AgentConfiguration = AgentConfiguration.DEFAULT
-) {
+class UiAutomationAgent(private val config: AgentConfiguration = AgentConfiguration.DEFAULT) {
     // 组件实例化
     private val actionParser = ActionParser()
     private val actionExecutor = ActionExecutor(config)
@@ -85,10 +78,8 @@ class UiAutomationAgent(
             val message: String,
             val steps: Int,
     )
-    
-    /**
-     * 运行Agent执行任务
-     */
+
+    /** 运行Agent执行任务 */
     suspend fun run(
             apiKey: String,
             model: String,
@@ -103,12 +94,11 @@ class UiAutomationAgent(
 
         // 初始化截图管理器
         screenshotManager = ScreenshotManager(config)
-        
+
         // 如果启用虚拟屏模式，先准备虚拟屏
         if (config.useBackgroundVirtualDisplay) {
             onLog("【虚拟屏模式】正在准备后台虚拟屏...")
-            val context = service as? android.content.Context 
-                ?: service.applicationContext
+            val context = service as? android.content.Context ?: service.applicationContext
             val displayId = VirtualDisplayController.prepareForTask(context, "")
             if (displayId != null && displayId > 0) {
                 onLog("【虚拟屏模式】虚拟屏已准备就绪，displayId=$displayId")
@@ -123,19 +113,17 @@ class UiAutomationAgent(
                 return AgentResult(false, "虚拟屏模式启动失败：请确保已安装 Shizuku 并授予权限", 0)
             }
         }
-        
+
         // try-finally 确保虚拟屏资源在任何退出路径下都被清理
         try {
-        return runAgentLoop(apiKey, model, task, service, control, onLog, screenW, screenH)
+            return runAgentLoop(apiKey, model, task, service, control, onLog, screenW, screenH)
         } finally {
             // 清理虚拟屏及预览悬浮窗
             cleanupVirtualDisplay(service)
         }
     }
-    
-    /**
-     * Agent 主循环（从 run 抽出以支持 try-finally 清理）
-     */
+
+    /** Agent 主循环（从 run 抽出以支持 try-finally 清理） */
     private suspend fun runAgentLoop(
             apiKey: String,
             model: String,
@@ -151,9 +139,10 @@ class UiAutomationAgent(
         if (smartLaunched) {
             onLog("✓ 应用已快速启动，继续后续操作...")
         }
-        
+
         // 虚拟屏模式：启动预览悬浮窗
-        if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()) {
+        if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()
+        ) {
             onLog("【虚拟屏模式】启动预览悬浮窗...")
             val ctx = service as? android.content.Context ?: service.applicationContext
             VirtualScreenPreviewOverlay.show(ctx)
@@ -161,14 +150,15 @@ class UiAutomationAgent(
 
         // 构建初始消息
         val history = mutableListOf<ChatRequestMessage>()
-        history += ChatRequestMessage(
-            role = "system",
-            content = PromptTemplates.buildSystemPrompt(screenW, screenH, null)
-        )
-        
+        history +=
+                ChatRequestMessage(
+                        role = "system",
+                        content = PromptTemplates.buildSystemPrompt(screenW, screenH, null)
+                )
+
         // 清理缓存
         screenshotManager?.clear()
-        
+
         // 重置状态
         lastActionWasTap = false
         lastTapAction = null
@@ -176,14 +166,16 @@ class UiAutomationAgent(
         var step = 0
         var currentScreenW = screenW
         var currentScreenH = screenH
-        
+
         while (step < config.maxSteps) {
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             awaitIfPaused(control)
             step++
-            
+
             // 虚拟屏模式下刷新当前内容尺寸，适配动态分辨率变化
-            if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()) {
+            if (config.useBackgroundVirtualDisplay &&
+                            VirtualDisplayController.isVirtualDisplayStarted()
+            ) {
                 val (vw, vh) = VirtualDisplayController.getContentSizeBestEffort(service)
                 if (vw > 0 && vh > 0) {
                     currentScreenW = vw
@@ -198,26 +190,29 @@ class UiAutomationAgent(
                     maxSteps = config.maxSteps,
                     subtitle = "读取界面"
             )
-            
+
             // 严格隔离模式：截图阶段不抢焦点，避免主屏返回键误作用到虚拟屏
-            
+
             // 并行获取截图和UI树
-            val (screenshot, rawUiDump) = coroutineScope {
-                val screenshotDeferred = async { 
-                    screenshotManager?.getOptimizedScreenshot(service) 
-                }
-                val uiDumpDeferred = async {
-                    if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()) {
-                        // 虚拟屏模式：纯视觉驱动，UI树置空
-                        // AccessibilityService 的 rootInActiveWindow 返回的是前台窗口的 UI 树，对虚拟屏无效
-                        "[虚拟屏模式-纯视觉驱动]"
-                    } else {
-                        service.dumpUiTreeWithRetry(maxNodes = config.uiTreeMaxNodes)
+            val (screenshot, rawUiDump) =
+                    coroutineScope {
+                        val screenshotDeferred = async {
+                            screenshotManager?.getOptimizedScreenshot(service)
+                        }
+                        val uiDumpDeferred = async {
+                            if (config.useBackgroundVirtualDisplay &&
+                                            VirtualDisplayController.isVirtualDisplayStarted()
+                            ) {
+                                // 虚拟屏模式：纯视觉驱动，UI树置空
+                                // AccessibilityService 的 rootInActiveWindow 返回的是前台窗口的 UI 树，对虚拟屏无效
+                                "[虚拟屏模式-纯视觉驱动]"
+                            } else {
+                                service.dumpUiTreeWithRetry(maxNodes = config.uiTreeMaxNodes)
+                            }
+                        }
+                        Pair(screenshotDeferred.await(), uiDumpDeferred.await())
                     }
-                }
-                Pair(screenshotDeferred.await(), uiDumpDeferred.await())
-            }
-            
+
             // 更新进度
             AutomationOverlay.updateProgress(
                     step = step,
@@ -225,7 +220,7 @@ class UiAutomationAgent(
                     maxSteps = config.maxSteps,
                     subtitle = "解析界面"
             )
-            
+
             // 截断UI树
             val uiDump = ActionUtils.truncateUiTree(rawUiDump, config.maxUiTreeChars)
 
@@ -240,19 +235,23 @@ class UiAutomationAgent(
             }
 
             // 构建用户消息
-            val userMsg = if (step == 1) {
+            val userMsg =
+                    if (step == 1) {
                         "$task\n\n$screenInfo\n\nUI树：\n$uiDump"
                     } else {
                         "$screenInfo\n\nUI树：\n$uiDump"
                     }
 
             // 构建消息内容
-            val userContent: Any = if (screenshot != null) {
+            val userContent: Any =
+                    if (screenshot != null) {
                         listOf(
                                 mapOf(
                                         "type" to "image_url",
-                        "image_url" to mapOf(
-                            "url" to "data:image/jpeg;base64,${screenshot.base64Png}"
+                                        "image_url" to
+                                                mapOf(
+                                                        "url" to
+                                                                "data:image/jpeg;base64,${screenshot.base64Png}"
                                                 )
                                 ),
                                 mapOf("type" to "text", "text" to userMsg)
@@ -260,10 +259,10 @@ class UiAutomationAgent(
                     } else {
                         userMsg
                     }
-            
+
             // 修剪历史
             trimHistory(history)
-            
+
             // 添加用户消息
             history += ChatRequestMessage(role = "user", content = userContent)
             val observationUserIndex = history.lastIndex
@@ -276,22 +275,23 @@ class UiAutomationAgent(
                     maxSteps = config.maxSteps,
                     subtitle = "请求模型"
             )
-            
+
             AutomationOverlay.startThinking()
-            
+
             // 调用模型
-            val replyResult = requestModelWithRetry(
-                apiKey = apiKey,
-                model = model,
-                messages = history,
-                step = step,
-                purpose = "请求模型",
-                onLog = onLog,
-            )
+            val replyResult =
+                    requestModelWithRetry(
+                            apiKey = apiKey,
+                            model = model,
+                            messages = history,
+                            step = step,
+                            purpose = "请求模型",
+                            onLog = onLog,
+                    )
 
             val finalReply = replyResult.getOrNull()?.trim().orEmpty()
             AutomationOverlay.stopThinking()
-            
+
             // 模型调用失败
             if (finalReply.isBlank()) {
                 val err = replyResult.exceptionOrNull()
@@ -325,7 +325,8 @@ class UiAutomationAgent(
             history += ChatRequestMessage(role = "assistant", content = finalReply)
 
             // 解析动作
-            val action = parseActionWithRepair(
+            val action =
+                    parseActionWithRepair(
                             apiKey = apiKey,
                             model = model,
                             history = history,
@@ -333,15 +334,19 @@ class UiAutomationAgent(
                             answerText = answer,
                             onLog = onLog,
                     )
-            
+
             // 检查是否完成
             if (action.metadata == "finish") {
                 val msg = action.fields["message"].orEmpty().ifBlank { "已完成" }
                 return AgentResult(true, msg, step)
             }
-            
+
             if (action.metadata != "do") {
-                return AgentResult(false, "无法解析动作：${action.raw.take(config.logStepTruncateLength)}", step)
+                return AgentResult(
+                        false,
+                        "无法解析动作：${action.raw.take(config.logStepTruncateLength)}",
+                        step
+                )
             }
 
             // 更新进度
@@ -358,13 +363,16 @@ class UiAutomationAgent(
             var repairAttempt = 0
 
             while (true) {
-                val actionName = currentAction.actionName
+                val actionName =
+                        currentAction
+                                .actionName
                                 ?.trim()
                                 ?.trim('"', '\'', ' ')
                                 ?.lowercase()
                                 .orEmpty()
-                
-                val displayActionName = ActionUtils.getDisplayActionName(actionName, currentAction.fields)
+
+                val displayActionName =
+                        ActionUtils.getDisplayActionName(actionName, currentAction.fields)
                 AutomationOverlay.updateProgress(
                         step = step,
                         phaseInStep = 0.78f,
@@ -384,41 +392,61 @@ class UiAutomationAgent(
                 }
 
                 // Tap+Type 合并执行检测
-                val isTypeAction = actionName == "type" || actionName == "input" || actionName == "text"
+                val isTypeAction =
+                        actionName == "type" || actionName == "input" || actionName == "text"
                 val wasPreviousTap = lastActionWasTap
 
-                execOk = try {
-                            val result = if (isTypeAction && wasPreviousTap) {
-                        // 合并执行
-                                val previousTapAction = lastTapAction
-                                lastActionWasTap = false
-                                lastTapAction = null
+                execOk =
+                        try {
+                            val result =
+                                    if (isTypeAction && wasPreviousTap) {
+                                        // 合并执行
+                                        val previousTapAction = lastTapAction
+                                        lastActionWasTap = false
+                                        lastTapAction = null
 
-                                if (previousTapAction != null) {
-                                    onLog("[合并执行] Tap + Type")
-                                    executeTapAndTypeCombined(
-                                        service = service,
-                                        tapAction = previousTapAction,
-                                        typeAction = currentAction,
-                                        uiDump = uiDump,
-                                        screenW = currentScreenW,
-                                        screenH = currentScreenH,
-                                        onLog = onLog
-                                    )
-                                } else {
-                            actionExecutor.execute(currentAction, service, uiDump, currentScreenW, currentScreenH, onLog)
-                                }
-                            } else {
-                                // 正常执行
-                                if (actionName == "tap" || actionName == "click" || actionName == "press") {
-                                    lastActionWasTap = true
-                                    lastTapAction = currentAction
-                                } else {
-                                    lastActionWasTap = false
-                                    lastTapAction = null
-                                }
-                        actionExecutor.execute(currentAction, service, uiDump, currentScreenW, currentScreenH, onLog)
-                            }
+                                        if (previousTapAction != null) {
+                                            onLog("[合并执行] Tap + Type")
+                                            executeTapAndTypeCombined(
+                                                    service = service,
+                                                    tapAction = previousTapAction,
+                                                    typeAction = currentAction,
+                                                    uiDump = uiDump,
+                                                    screenW = currentScreenW,
+                                                    screenH = currentScreenH,
+                                                    onLog = onLog
+                                            )
+                                        } else {
+                                            actionExecutor.execute(
+                                                    currentAction,
+                                                    service,
+                                                    uiDump,
+                                                    currentScreenW,
+                                                    currentScreenH,
+                                                    onLog
+                                            )
+                                        }
+                                    } else {
+                                        // 正常执行
+                                        if (actionName == "tap" ||
+                                                        actionName == "click" ||
+                                                        actionName == "press"
+                                        ) {
+                                            lastActionWasTap = true
+                                            lastTapAction = currentAction
+                                        } else {
+                                            lastActionWasTap = false
+                                            lastTapAction = null
+                                        }
+                                        actionExecutor.execute(
+                                                currentAction,
+                                                service,
+                                                uiDump,
+                                                currentScreenW,
+                                                currentScreenH,
+                                                onLog
+                                        )
+                                    }
 
                             result
                         } catch (e: TakeOverException) {
@@ -427,7 +455,9 @@ class UiAutomationAgent(
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                    onLog("[Step $step] 动作执行异常：${e.message.orEmpty().take(config.logStepTruncateLength)}")
+                            onLog(
+                                    "[Step $step] 动作执行异常：${e.message.orEmpty().take(config.logStepTruncateLength)}"
+                            )
                             false
                         }
 
@@ -435,7 +465,11 @@ class UiAutomationAgent(
 
                 // 动作执行失败，尝试修复
                 if (repairAttempt >= config.maxActionRepairs) {
-                    return AgentResult(false, "动作执行失败：${currentAction.raw.take(config.logStepTruncateLength)}", step)
+                    return AgentResult(
+                            false,
+                            "动作执行失败：${currentAction.raw.take(config.logStepTruncateLength)}",
+                            step
+                    )
                 }
 
                 repairAttempt++
@@ -452,7 +486,8 @@ class UiAutomationAgent(
                 val failMsg = PromptTemplates.buildActionRepairPrompt(currentAction.raw)
                 history += ChatRequestMessage(role = "user", content = failMsg)
 
-                val fixResult = requestModelWithRetry(
+                val fixResult =
+                        requestModelWithRetry(
                                 apiKey = apiKey,
                                 model = model,
                                 messages = history,
@@ -460,7 +495,7 @@ class UiAutomationAgent(
                                 purpose = "动作修复",
                                 onLog = onLog,
                         )
-                
+
                 val fixFinal = fixResult.getOrNull()?.trim().orEmpty()
                 if (fixFinal.isBlank()) {
                     val err = fixResult.exceptionOrNull()
@@ -482,7 +517,8 @@ class UiAutomationAgent(
                 onLog("[Step $step] 修复输出：${fixAnswer.take(config.logAnswerTruncateLength)}")
                 history += ChatRequestMessage(role = "assistant", content = fixFinal)
 
-                currentAction = parseActionWithRepair(
+                currentAction =
+                        parseActionWithRepair(
                                 apiKey = apiKey,
                                 model = model,
                                 history = history,
@@ -496,7 +532,11 @@ class UiAutomationAgent(
                     return AgentResult(true, msg, step)
                 }
                 if (currentAction.metadata != "do") {
-                    return AgentResult(false, "无法解析动作：${currentAction.raw.take(config.logStepTruncateLength)}", step)
+                    return AgentResult(
+                            false,
+                            "无法解析动作：${currentAction.raw.take(config.logStepTruncateLength)}",
+                            step
+                    )
                 }
             }
 
@@ -515,7 +555,8 @@ class UiAutomationAgent(
             if (observationUserIndex in history.indices) {
                 val obs = history[observationUserIndex]
                 if (obs.content is List<*>) {
-                    history[observationUserIndex] = ChatRequestMessage(role = "user", content = userMsg)
+                    history[observationUserIndex] =
+                            ChatRequestMessage(role = "user", content = userMsg)
                 }
             }
 
@@ -525,10 +566,8 @@ class UiAutomationAgent(
 
         return AgentResult(false, "达到最大步数限制（${config.maxSteps}）", config.maxSteps)
     } // end of run()
-    
-    /**
-     * 清理虚拟屏及预览悬浮窗资源
-     */
+
+    /** 清理虚拟屏及预览悬浮窗资源 */
     private fun cleanupVirtualDisplay(service: PhoneAgentAccessibilityService) {
         if (config.useBackgroundVirtualDisplay) {
             val ctx = service as? android.content.Context ?: service.applicationContext
@@ -537,32 +576,39 @@ class UiAutomationAgent(
         }
     }
 
-    /**
-     * 检测用户任务中是否包含需要打开的应用，如果包含则自动启动
-     */
+    /** 检测用户任务中是否包含需要打开的应用，如果包含则自动启动 */
     private suspend fun trySmartAppLaunch(
-        task: String,
-        service: PhoneAgentAccessibilityService,
-        onLog: (String) -> Unit,
+            task: String,
+            service: PhoneAgentAccessibilityService,
+            onLog: (String) -> Unit,
     ): Boolean {
-        val launchPatterns = listOf(
-            Regex("""(?:打开|启动|进入|帮我打开|用|去|切换到|跳转到|回到)\s*([^\s，。,\.！!？?；;]+?)(?:\s|，|。|,|\.|！|!|？|\?|；|;|$)"""),
-            Regex("""(?:open|launch|start|switch\s+to|go\s+to)\s*(\S+)""", RegexOption.IGNORE_CASE),
-        )
-        
+        val launchPatterns =
+                listOf(
+                        Regex(
+                                """(?:打开|启动|进入|帮我打开|用|去|切换到|跳转到|回到)\s*([^\s，。,\.！!？?；;]+?)(?:\s|，|。|,|\.|！|!|？|\?|；|;|$)"""
+                        ),
+                        Regex(
+                                """(?:open|launch|start|switch\s+to|go\s+to)\s*(\S+)""",
+                                RegexOption.IGNORE_CASE
+                        ),
+                )
+
         // 初始化应用包名管理器
         com.ai.phoneagent.core.tools.AppPackageManager.initializeCache(service)
-        
+
         var resolvedPackage: String? = null
         var matchedAppName: String? = null
-        
+
         for (pattern in launchPatterns) {
             val matchResult = pattern.find(task)
             if (matchResult != null) {
                 val potentialApp = matchResult.groupValues.getOrNull(1)?.trim()
                 if (!potentialApp.isNullOrBlank()) {
                     // 使用新的智能解析（包含防误匹配逻辑、高优先级关键词）
-                    resolvedPackage = com.ai.phoneagent.core.tools.AppPackageManager.resolvePackageName(potentialApp)
+                    resolvedPackage =
+                            com.ai.phoneagent.core.tools.AppPackageManager.resolvePackageName(
+                                    potentialApp
+                            )
                     if (resolvedPackage != null) {
                         matchedAppName = potentialApp
                         break
@@ -570,7 +616,7 @@ class UiAutomationAgent(
                 }
             }
         }
-        
+
         // 如果正则匹配失败，尝试全文搜索已安装应用
         if (resolvedPackage == null) {
             val allApps = com.ai.phoneagent.core.tools.AppPackageManager.getAllInstalledApps()
@@ -582,35 +628,37 @@ class UiAutomationAgent(
                 }
             }
         }
-        
+
         if (resolvedPackage == null) {
             onLog("[⚡快速启动] 未在文本中识别到有效应用名称")
             return false
         }
-        
+
         val currentApp = service.currentAppPackage()
         if (currentApp == resolvedPackage) {
             onLog("[⚡快速启动] ${matchedAppName} 已在前台，跳过启动（无需连接模型）")
             return true
         }
-        
+
         val pm = service.packageManager
         val intent = pm.getLaunchIntentForPackage(resolvedPackage)
         if (intent == null) {
             onLog("[⚡快速启动] 未找到 ${matchedAppName}(${resolvedPackage}) 的启动入口")
             return false
         }
-        
+
         intent.addFlags(
-            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-            android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION or
-            android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                        android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                        android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
         )
-        
+
         try {
             val beforeTime = service.lastWindowEventTime()
-            
-            if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()) {
+
+            if (config.useBackgroundVirtualDisplay &&
+                            VirtualDisplayController.isVirtualDisplayStarted()
+            ) {
                 // 虚拟屏模式：启动到虚拟屏（不切换系统焦点）
                 val displayId = VirtualDisplayController.getDisplayId() ?: -1
                 LaunchProxyActivity.launchOnDisplay(service, intent, displayId)
@@ -624,7 +672,7 @@ class UiAutomationAgent(
                 onLog("[⚡快速启动] 后台启动 ${matchedAppName}（无需连接模型，节省时间）")
                 service.awaitWindowEvent(beforeTime, timeoutMs = config.appLaunchWaitTimeoutMs)
                 delay(config.appLaunchExtraDelayMs)
-                
+
                 // 验证应用是否真的启动了
                 val newApp = service.currentAppPackage()
                 if (newApp != resolvedPackage) {
@@ -633,7 +681,7 @@ class UiAutomationAgent(
                     onLog("[⚡快速启动] ${matchedAppName} 启动成功，继续后续操作...")
                 }
             }
-            
+
             // 清理截图缓存，确保获取最新的应用界面截图
             screenshotManager?.clear()
             return true
@@ -642,44 +690,46 @@ class UiAutomationAgent(
             return false
         }
     }
-    
-    /**
-     * 合并执行 Tap+Type 操作
-     */
+
+    /** 合并执行 Tap+Type 操作 */
     private suspend fun executeTapAndTypeCombined(
-        service: PhoneAgentAccessibilityService,
-        tapAction: ParsedAgentAction,
-        typeAction: ParsedAgentAction,
-        uiDump: String,
-        screenW: Int,
-        screenH: Int,
-        onLog: (String) -> Unit,
+            service: PhoneAgentAccessibilityService,
+            tapAction: ParsedAgentAction,
+            typeAction: ParsedAgentAction,
+            uiDump: String,
+            screenW: Int,
+            screenH: Int,
+            onLog: (String) -> Unit,
     ): Boolean {
         val inputText = typeAction.fields["text"].orEmpty()
 
         // 提取点击坐标
-        val element = ActionUtils.parsePoint(tapAction.fields["element"])
-            ?: ActionUtils.parsePoint(tapAction.fields["point"])
-            ?: ActionUtils.parsePoint(tapAction.fields["pos"])
-        
+        val element =
+                ActionUtils.parsePoint(tapAction.fields["element"])
+                        ?: ActionUtils.parsePoint(tapAction.fields["point"])
+                                ?: ActionUtils.parsePoint(tapAction.fields["pos"])
+
         if (element == null) {
             onLog("[合并执行] 无法获取点击坐标，回退到分别执行")
             return actionExecutor.execute(typeAction, service, uiDump, screenW, screenH, onLog)
         }
-        
-        val (x, y) = ActionUtils.parsePointToScreen(element, screenW, screenH)
-        onLog("[合并执行] Tap(${element.first},${element.second}) + Type(${inputText.take(config.logCombineInputTextTruncateLength)})")
 
-        val isVdMode = config.useBackgroundVirtualDisplay
-                && VirtualDisplayController.shouldUseVirtualDisplay
-                && VirtualDisplayController.isVirtualDisplayStarted()
-        
+        val (x, y) = ActionUtils.parsePointToScreen(element, screenW, screenH)
+        onLog(
+                "[合并执行] Tap(${element.first},${element.second}) + Type(${inputText.take(config.logCombineInputTextTruncateLength)})"
+        )
+
+        val isVdMode =
+                config.useBackgroundVirtualDisplay &&
+                        VirtualDisplayController.shouldUseVirtualDisplay &&
+                        VirtualDisplayController.isVirtualDisplayStarted()
+
         if (isVdMode) {
             // 虚拟屏模式：先注入点击，再输入文本（不切换系统焦点）
             val displayId = VirtualDisplayController.getDisplayId() ?: -1
             VirtualDisplayController.injectTapBestEffort(displayId, x.toInt(), y.toInt())
             delay(config.tapTypeCombineKeyboardWaitMs)
-            
+
             val result = actionExecutor.injectTextOnVirtualDisplay(displayId, inputText, onLog)
             return result
         }
@@ -705,10 +755,10 @@ class UiAutomationAgent(
         // 如果失败，尝试查找可编辑元素
         if (!ok) {
             onLog("[合并执行] 直接输入失败，尝试查找输入框...")
-        val inputClicked = service.clickFirstEditableElement()
-        if (inputClicked) {
-                        delay(200)
-                        ok = service.setTextOnFocused(inputText)
+            val inputClicked = service.clickFirstEditableElement()
+            if (inputClicked) {
+                delay(200)
+                ok = service.setTextOnFocused(inputText)
             }
         }
 
@@ -716,124 +766,127 @@ class UiAutomationAgent(
         return ok
     }
 
-    /**
-     * 解析动作并修复
-     */
+    /** 解析动作并修复 */
     private suspend fun parseActionWithRepair(
-        apiKey: String,
-        model: String,
-        history: MutableList<ChatRequestMessage>,
-        step: Int,
-        answerText: String,
+            apiKey: String,
+            model: String,
+            history: MutableList<ChatRequestMessage>,
+            step: Int,
+            answerText: String,
             onLog: (String) -> Unit,
     ): ParsedAgentAction {
-        var action = actionParser.parse(ActionUtils.extractFirstActionSnippet(answerText) ?: answerText)
-        
+        var action =
+                actionParser.parse(ActionUtils.extractFirstActionSnippet(answerText) ?: answerText)
+
         if (action.metadata == "do" || action.metadata == "finish") {
             return action
         }
-        
+
         var attempt = 0
-        while (attempt < config.maxParseRepairs && action.metadata != "do" && action.metadata != "finish") {
+        while (attempt < config.maxParseRepairs &&
+                action.metadata != "do" &&
+                action.metadata != "finish") {
             attempt++
             onLog("[Step $step] 输出无法解析为动作，尝试修正（$attempt/${config.maxParseRepairs}）…")
-            
+
             // 构建修复消息
             val repairHistory = mutableListOf<ChatRequestMessage>()
             history.firstOrNull { it.role == "system" }?.let { repairHistory.add(it) }
             history.lastOrNull { it.role == "user" }?.let { repairHistory.add(it) }
-            repairHistory.add(ChatRequestMessage(role = "user", content = PromptTemplates.buildRepairPrompt()))
-            
-            val repairResult = requestModelWithRetry(
-                apiKey = apiKey,
-                model = model,
-                messages = repairHistory,
-                step = step,
-                purpose = "修正输出",
-                onLog = onLog,
+            repairHistory.add(
+                    ChatRequestMessage(role = "user", content = PromptTemplates.buildRepairPrompt())
             )
-            
+
+            val repairResult =
+                    requestModelWithRetry(
+                            apiKey = apiKey,
+                            model = model,
+                            messages = repairHistory,
+                            step = step,
+                            purpose = "修正输出",
+                            onLog = onLog,
+                    )
+
             val repairFinal = repairResult.getOrNull()?.trim().orEmpty()
             if (repairFinal.isBlank()) {
                 val err = repairResult.exceptionOrNull()
                 onLog("[Step $step] 修正输出失败：${err?.message.orEmpty().take(240)}")
                 continue
             }
-            
+
             val (_, repairAnswer) = actionParser.parseWithThinking(repairFinal)
             onLog("[Step $step] 修正输出：${repairAnswer.take(220)}")
-            
-            action = actionParser.parse(ActionUtils.extractFirstActionSnippet(repairAnswer) ?: repairAnswer)
+
+            action =
+                    actionParser.parse(
+                            ActionUtils.extractFirstActionSnippet(repairAnswer) ?: repairAnswer
+                    )
         }
-        
+
         return action
     }
-    
-    /**
-     * 带重试的模型请求
-     */
+
+    /** 带重试的模型请求 */
     private suspend fun requestModelWithRetry(
-        apiKey: String,
-        model: String,
-        messages: List<ChatRequestMessage>,
-        step: Int,
-        purpose: String,
-        onLog: (String) -> Unit,
+            apiKey: String,
+            model: String,
+            messages: List<ChatRequestMessage>,
+            step: Int,
+            purpose: String,
+            onLog: (String) -> Unit,
     ): kotlin.Result<String> {
         val maxAttempts = (config.maxModelRetries + 1).coerceAtLeast(1)
         var lastErr: Throwable? = null
-        
+
         for (attempt in 0 until maxAttempts) {
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            
-            val result = withContext(Dispatchers.IO) {
-                AutoGlmClient.sendChatResult(
-                    apiKey = apiKey,
-                    messages = messages,
-                    model = model,
-                    temperature = config.temperature,
-                    maxTokens = config.maxTokens,
-                    topP = config.topP,
-                    frequencyPenalty = config.frequencyPenalty,
-                )
-            }
-            
+
+            val result =
+                    withContext(Dispatchers.IO) {
+                        AutoGlmClient.sendChatResult(
+                                apiKey = apiKey,
+                                messages = messages,
+                                model = model,
+                                temperature = config.temperature,
+                                maxTokens = config.maxTokens,
+                                topP = config.topP,
+                                frequencyPenalty = config.frequencyPenalty,
+                        )
+                    }
+
             if (result.isSuccess) return result
-            
+
             val err = result.exceptionOrNull()
             if (err is CancellationException) throw err
             lastErr = err
-            
+
             val retryable = ActionUtils.isRetryableModelError(err)
             if (!retryable || attempt >= maxAttempts - 1) break
-            
+
             val waitMs = ActionUtils.computeModelRetryDelayMs(attempt, config.modelRetryBaseDelayMs)
-            onLog("[Step $step] $purpose 失败：${err?.message.orEmpty().take(240)}（${attempt + 1}/$maxAttempts），${waitMs}ms 后重试…")
+            onLog(
+                    "[Step $step] $purpose 失败：${err?.message.orEmpty().take(240)}（${attempt + 1}/$maxAttempts），${waitMs}ms 后重试…"
+            )
             delay(waitMs)
         }
-        
+
         return kotlin.Result.failure(lastErr ?: java.io.IOException("Unknown model error"))
     }
-    
-    /**
-     * 等待暂停状态恢复
-     */
+
+    /** 等待暂停状态恢复 */
     private suspend fun awaitIfPaused(control: Control) {
         while (control.isPaused()) {
             delay(config.pauseCheckIntervalMs)
         }
     }
-    
-    /**
-     * 修剪历史消息，保持上下文在限制内
-     */
+
+    /** 修剪历史消息，保持上下文在限制内 */
     private fun trimHistory(history: MutableList<ChatRequestMessage>) {
         // 移除图片只保留文本
         for (i in history.indices) {
             val msg = history[i]
             if (msg.content is List<*>) {
-                @Suppress("UNCHECKED_CAST")
-                val content = msg.content as List<Map<String, Any>>
+                @Suppress("UNCHECKED_CAST") val content = msg.content as List<Map<String, Any>>
                 val textOnly = content.filter { it["type"] == "text" }
                 if (textOnly.isNotEmpty()) {
                     history[i] = ChatRequestMessage(role = msg.role, content = textOnly)
@@ -842,7 +895,8 @@ class UiAutomationAgent(
         }
 
         // 按token数量修剪
-        while (history.size > 2 && ActionUtils.estimateHistoryTokens(history) > config.maxContextTokens) {
+        while (history.size > 2 &&
+                ActionUtils.estimateHistoryTokens(history) > config.maxContextTokens) {
             val removeIndex = history.indexOfFirst { it.role != "system" }
             if (removeIndex >= 0) {
                 history.removeAt(removeIndex)
