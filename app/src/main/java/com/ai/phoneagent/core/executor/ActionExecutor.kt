@@ -18,10 +18,15 @@
 package com.ai.phoneagent.core.executor
 
 import android.accessibilityservice.AccessibilityService
+import android.app.ActivityOptions
+import android.content.Intent
 import android.graphics.Rect
+import android.util.Log
 import com.ai.phoneagent.AutomationOverlay
 import com.ai.phoneagent.LaunchProxyActivity
 import com.ai.phoneagent.PhoneAgentAccessibilityService
+import com.ai.phoneagent.ShizukuBridge
+import com.ai.phoneagent.VirtualDisplayController
 import com.ai.phoneagent.core.agent.ParsedAgentAction
 import com.ai.phoneagent.core.config.AgentConfiguration
 import com.ai.phoneagent.core.utils.ActionUtils
@@ -36,7 +41,40 @@ import kotlinx.coroutines.delay
 class ActionExecutor(
     private val config: AgentConfiguration = AgentConfiguration.DEFAULT
 ) {
-    // ActionUtils 是 object 单例，直接使用
+    companion object {
+        private const val TAG = "ActionExecutor"
+    }
+
+    // ─── 虚拟屏模式辅助方法 ───
+
+    /**
+     * 判断当前是否应使用虚拟屏执行路径
+     */
+    private fun isVirtualDisplayMode(): Boolean {
+        return config.useBackgroundVirtualDisplay
+                && VirtualDisplayController.shouldUseVirtualDisplay
+                && VirtualDisplayController.isVirtualDisplayStarted()
+    }
+
+    /**
+     * 获取虚拟屏 displayId，不可用时返回 -1
+     */
+    private fun getVirtualDisplayId(): Int {
+        return VirtualDisplayController.getDisplayId() ?: -1
+    }
+
+    /**
+     * 完全隔离模式：不切换焦点到虚拟屏。
+     * 所有 VD 操作通过 displayId 定向注入，焦点始终在主屏。
+     */
+    private var lastEnsureFocusMs = 0L
+    private fun ensureVdFocus() {
+        // NO-OP: 焦点隔离模式下，不切换系统焦点到虚拟屏。
+        // 虚拟屏的触摸/按键/文本输入全部通过 displayId 定向注入。
+        // 焦点维持在主屏（display 0），由 VirtualDisplayController 周期性强制执行。
+    }
+
+
 
     /**
      * 执行动作
@@ -183,9 +221,19 @@ class ActionExecutor(
         )
 
         return try {
-            // 后台静默启动 - 快速启动不等待UI
-            LaunchProxyActivity.launch(service, intent)
-            true // 静默启动，不等待窗口事件
+            if (isVirtualDisplayMode()) {
+                // ── 虚拟屏模式：将应用启动到虚拟屏（不切换系统焦点）──
+                val displayId = getVirtualDisplayId()
+                onLog("Launch → 虚拟屏 displayId=$displayId")
+                LaunchProxyActivity.launchOnDisplay(service, intent, displayId)
+                delay(config.launchActionDelayMs)  // 等待应用在虚拟屏上启动
+                // 系统可能因 Activity 创建自动切焦，立即恢复
+                VirtualDisplayController.restoreFocusToDefaultDisplayNow()
+            } else {
+                // ── 前台模式 ──
+                LaunchProxyActivity.launch(service, intent)
+            }
+            true
         } catch (e: Exception) {
             onLog("Launch 失败：${e.message.orEmpty()}")
             false
@@ -214,6 +262,12 @@ class ActionExecutor(
         onLog: (String) -> Unit
     ): Boolean {
         onLog("执行：Back")
+        if (isVirtualDisplayMode()) {
+            ensureVdFocus()
+            VirtualDisplayController.injectBackBestEffort(getVirtualDisplayId())
+            delay(config.backAwaitWindowTimeoutMs)
+            return true
+        }
         val beforeTime = service.lastWindowEventTime()
         service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
         service.awaitWindowEvent(beforeTime, timeoutMs = config.backAwaitWindowTimeoutMs)
@@ -225,6 +279,12 @@ class ActionExecutor(
         onLog: (String) -> Unit
     ): Boolean {
         onLog("执行：Home")
+        if (isVirtualDisplayMode()) {
+            ensureVdFocus()
+            VirtualDisplayController.injectHomeBestEffort(getVirtualDisplayId())
+            delay(config.homeAwaitWindowTimeoutMs)
+            return true
+        }
         val beforeTime = service.lastWindowEventTime()
         service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
         service.awaitWindowEvent(beforeTime, timeoutMs = config.homeAwaitWindowTimeoutMs)
@@ -292,11 +352,28 @@ class ActionExecutor(
         if (element != null) {
             val (x, y) = ActionUtils.parsePointToScreen(element, screenW, screenH)
             onLog("执行：先点击输入框(${element.first},${element.second})")
-            service.clickAwait(x, y)
+            if (isVirtualDisplayMode()) {
+                ensureVdFocus()
+                VirtualDisplayController.injectTapBestEffort(getVirtualDisplayId(), x.toInt(), y.toInt())
+            } else {
+                service.clickAwait(x, y)
+            }
             delay(300)
         }
 
         onLog("执行：Type(${inputText.take(config.logInputTextTruncateLength)})")
+
+        if (isVirtualDisplayMode()) {
+            // 虚拟屏模式：根据文本内容选择最佳输入方式
+            ensureVdFocus()
+            val displayId = getVirtualDisplayId()
+            val ok = injectTextOnVirtualDisplay(displayId, inputText, onLog)
+            if (!ok) {
+                onLog("虚拟屏文本输入失败")
+            }
+            delay(config.typeAwaitWindowTimeoutMs)
+            return ok
+        }
 
         var ok = if (resourceId != null || contentDesc != null || className != null || elementText != null) {
             service.setTextOnElement(
@@ -346,8 +423,8 @@ class ActionExecutor(
             ?: action.fields["label"]
         val index = action.fields["index"]?.trim()?.toIntOrNull() ?: 0
 
-        // 优先使用 selector
-        val selectorOk = if (resourceId != null || contentDesc != null || className != null || elementText != null) {
+        // 优先使用 selector（仅前台模式，虚拟屏模式下 AccessibilityService 操作的是前台屏幕）
+        val selectorOk = if (!isVirtualDisplayMode() && (resourceId != null || contentDesc != null || className != null || elementText != null)) {
             onLog("执行：Tap(selector)")
             // 临时隐藏悬浮窗，防止点击到悬浮窗
             AutomationOverlay.temporaryHide()
@@ -378,6 +455,14 @@ class ActionExecutor(
 
         val (x, y) = ActionUtils.parsePointToScreen(xRel to yRel, screenW, screenH)
         onLog("执行：Tap($xRel,$yRel)")
+
+        if (isVirtualDisplayMode()) {
+            ensureVdFocus()
+            VirtualDisplayController.injectTapBestEffort(getVirtualDisplayId(), x.toInt(), y.toInt())
+            delay(config.tapAwaitWindowTimeoutMs)
+            return true
+        }
+
         // 临时隐藏悬浮窗，防止点击到悬浮窗
         AutomationOverlay.temporaryHide()
         service.clickAwait(x, y)
@@ -397,6 +482,20 @@ class ActionExecutor(
         val (x, y) = ActionUtils.parsePointToScreen(element, screenW, screenH)
 
         onLog("执行：Long Press(${element.first},${element.second})")
+
+        if (isVirtualDisplayMode()) {
+            ensureVdFocus()
+            val displayId = getVirtualDisplayId()
+            // 长按 = DOWN → delay → UP
+            val downTime = android.os.SystemClock.uptimeMillis()
+            VirtualDisplayController.injectTapBestEffort(displayId, x.toInt(), y.toInt()) // 先发 down
+            delay(config.longPressDurationMs)
+            // 注入 UP 事件完成长按（best-effort：部分 ROM 上 injectTap 已自动发 DOWN+UP，此处补发一次无副作用）
+            VirtualDisplayController.injectTapBestEffort(displayId, x.toInt(), y.toInt())
+            delay(config.tapAwaitWindowTimeoutMs)
+            return true
+        }
+
         // 临时隐藏悬浮窗
         AutomationOverlay.temporaryHide()
         service.clickAwait(x, y, durationMs = config.longPressDurationMs)
@@ -416,6 +515,17 @@ class ActionExecutor(
         val (x, y) = ActionUtils.parsePointToScreen(element, screenW, screenH)
 
         onLog("执行：Double Tap(${element.first},${element.second})")
+
+        if (isVirtualDisplayMode()) {
+            ensureVdFocus()
+            val displayId = getVirtualDisplayId()
+            VirtualDisplayController.injectTapBestEffort(displayId, x.toInt(), y.toInt())
+            delay(config.doubleTapIntervalMs)
+            VirtualDisplayController.injectTapBestEffort(displayId, x.toInt(), y.toInt())
+            delay(config.tapAwaitWindowTimeoutMs)
+            return true
+        }
+
         // 临时隐藏悬浮窗
         AutomationOverlay.temporaryHide()
         val ok1 = service.clickAwait(x, y, durationMs = config.clickDurationMs)
@@ -452,6 +562,16 @@ class ActionExecutor(
         val (ex, ey) = ActionUtils.parsePointToScreen(exRel to eyRel, screenW, screenH)
 
         onLog("执行：Swipe($sxRel,$syRel -> $exRel,$eyRel, ${dur}ms)")
+
+        if (isVirtualDisplayMode()) {
+            ensureVdFocus()
+            VirtualDisplayController.injectSwipeBestEffort(
+                getVirtualDisplayId(), sx.toInt(), sy.toInt(), ex.toInt(), ey.toInt(), dur
+            )
+            delay(config.swipeAwaitWindowTimeoutMs)
+            return true
+        }
+
         // 临时隐藏悬浮窗
         AutomationOverlay.temporaryHide()
         service.swipeAwait(sx, sy, ex, ey, dur)
@@ -459,5 +579,95 @@ class ActionExecutor(
         service.awaitWindowEvent(service.lastWindowEventTime(), timeoutMs = config.swipeAwaitWindowTimeoutMs)
         return true
     }
-}
 
+    // ─── 虚拟屏文本输入 ───
+
+    /**
+     * 在虚拟屏上输入文本（支持中文等非 ASCII 字符）
+     *
+     * 策略：
+     * 1. 纯 ASCII 文本 → 直接使用 `input -d <displayId> text`
+     * 2. 含非 ASCII 字符 → 先写入剪贴板，再注入 Ctrl+V 粘贴到虚拟屏
+     * 3. 剪贴板方式失败 → 回退到逐字 `input text` 尝试
+     */
+    internal fun injectTextOnVirtualDisplay(displayId: Int, text: String, onLog: (String) -> Unit): Boolean {
+        if (displayId <= 0 || text.isEmpty()) return false
+
+        val isAsciiOnly = text.all { it.code in 0..127 }
+
+        if (isAsciiOnly) {
+            // ASCII 文本直接用 input text 命令
+            val escaped = text.replace(" ", "%s").replace("'", "\\'").replace("\"", "\\\"")
+            val cmd = "input -d $displayId text '$escaped'"
+            val result = ShizukuBridge.execResult(cmd)
+            if (result.exitCode == 0) return true
+            // 带 -d 失败，尝试不带 -d（某些 ROM 不支持）
+            val cmd2 = "input text '$escaped'"
+            val r2 = ShizukuBridge.execResult(cmd2)
+            if (r2.exitCode == 0) return true
+            onLog("ASCII input 命令失败，尝试剪贴板方式...")
+        }
+
+        // 非 ASCII 或 ASCII 失败 → 使用剪贴板 + 粘贴方式
+        if (setClipboardAndPaste(displayId, text, onLog)) return true
+
+        // 回退方案：使用 am broadcast 方式（需要 ADBKeyboard 或类似 IME）
+        val broadcastResult = ShizukuBridge.execResult(
+            "am broadcast -a ADB_INPUT_TEXT --es msg '$text'"
+        )
+        if (broadcastResult.exitCode == 0) {
+            val output = broadcastResult.stdoutText()
+            if (output.contains("result=0") || output.contains("result=-1")) {
+                return true
+            }
+        }
+
+        // 最后回退：不带 -d 的 input text（对某些设备可能有效）
+        if (!isAsciiOnly) {
+            val escaped = text.replace(" ", "%s").replace("'", "\\'").replace("\"", "\\\"")
+            val cmd = "input text '$escaped'"
+            val result = ShizukuBridge.execResult(cmd)
+            if (result.exitCode == 0) return true
+        }
+
+        onLog("所有虚拟屏文本输入方式均失败")
+        return false
+    }
+
+    /**
+     * 通过剪贴板 + Ctrl+V 粘贴方式输入文本
+     */
+    private fun setClipboardAndPaste(displayId: Int, text: String, onLog: (String) -> Unit): Boolean {
+        // 方式 1: 使用 cmd clipboard（Android 12+ 可用）
+        val escapedText = text.replace("'", "'\\''")
+        val clipCmds = listOf(
+            "cmd clipboard set-text '$escapedText'",
+            "service call clipboard 2 i32 1 i64 0 s16 'com.android.shell' s16 '$escapedText' i32 0 i32 0",
+        )
+
+        var clipboardSet = false
+        for (cmd in clipCmds) {
+            val r = ShizukuBridge.execResult(cmd)
+            if (r.exitCode == 0) {
+                clipboardSet = true
+                break
+            }
+        }
+
+        if (!clipboardSet) {
+            onLog("剪贴板设置失败，跳过粘贴方式")
+            return false
+        }
+
+        // 等待剪贴板同步
+        try { Thread.sleep(100) } catch (_: InterruptedException) {}
+
+        // 在虚拟屏上注入 Ctrl+V（粘贴）
+        VirtualDisplayController.injectPasteBestEffort(displayId)
+
+        // 等待粘贴完成
+        try { Thread.sleep(200) } catch (_: InterruptedException) {}
+
+        return true
+    }
+}

@@ -162,7 +162,8 @@ class SherpaSpeechRecognizer(private val context: Context) {
 
     private fun createRecognizer(): Boolean {
         val modelDirName = "sherpa-ncnn-streaming-zipformer-bilingual-zh-en-2023-02-13"
-        val assetModelDir = "sherpa-models/models/$modelDirName"
+        val assetModelDir = "sherpa-models/$modelDirName"
+        val legacyAssetModelDir = "sherpa-models/models/$modelDirName"
 
         val requiredFiles = listOf(
             "encoder_jit_trace-pnnx.ncnn.param",
@@ -174,11 +175,16 @@ class SherpaSpeechRecognizer(private val context: Context) {
             "tokens.txt",
         )
 
-        val localModelDir = ensureModelDirReady(
-            assetDir = assetModelDir,
-            targetRootDir = context.filesDir,
-            requiredFiles = requiredFiles
-        ) ?: return false
+        val localModelDir =
+            ensureModelDirReady(
+                assetDir = assetModelDir,
+                targetRootDir = context.filesDir,
+                requiredFiles = requiredFiles
+            ) ?: ensureModelDirReady(
+                assetDir = legacyAssetModelDir,
+                targetRootDir = context.filesDir,
+                requiredFiles = requiredFiles
+            ) ?: return false
 
         val featConfig = getFeatureExtractorConfig(sampleRate = SAMPLE_RATE.toFloat(), featureDim = 80)
 

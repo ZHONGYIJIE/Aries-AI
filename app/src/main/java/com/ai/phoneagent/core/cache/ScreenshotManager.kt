@@ -18,15 +18,16 @@
 package com.ai.phoneagent.core.cache
 
 import com.ai.phoneagent.PhoneAgentAccessibilityService
+import com.ai.phoneagent.VirtualDisplayController
 import com.ai.phoneagent.core.config.AgentConfiguration
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * 截图优化管理器 - 整合缓存+节流+压缩
+ * 截图优化管理器 - 整合缓存+节流+压缩+虚拟屏支持
  * 
  * 提供统一的截图获取接口，集成缓存和节流功能
- * 保持原有性能优化逻辑
+ * 支持虚拟屏模式（后台隔离执行）
  */
 class ScreenshotManager(
     private val config: AgentConfiguration = AgentConfiguration.DEFAULT
@@ -42,13 +43,19 @@ class ScreenshotManager(
     
     /**
      * 优化的截图获取方法
-     * 1. 检查节流器，防止频繁截图
-     * 2. 检查缓存，避免重复截图
-     * 3. 执行截图并压缩优化
+     * 1. 检查是否启用虚拟屏模式，如是则使用虚拟屏截图
+     * 2. 检查节流器，防止频繁截图
+     * 3. 检查缓存，避免重复截图
+     * 4. 执行截图并压缩优化
      */
     suspend fun getOptimizedScreenshot(
         service: PhoneAgentAccessibilityService
     ): PhoneAgentAccessibilityService.ScreenshotData? {
+        // 优先检查虚拟屏模式
+        if (config.useBackgroundVirtualDisplay) {
+            return getVirtualDisplayScreenshot()
+        }
+        
         // 检查节流器
         if (!throttler.canTakeScreenshot()) {
             val remainingWait = throttler.getRemainingWaitTime()
@@ -77,6 +84,28 @@ class ScreenshotManager(
         }
         
         return screenshot
+    }
+    
+    /**
+     * 获取虚拟屏截图
+     */
+    private fun getVirtualDisplayScreenshot(): PhoneAgentAccessibilityService.ScreenshotData? {
+        return try {
+            val b64 = VirtualDisplayController.screenshotPngBase64NonBlack()
+            if (b64.isNotEmpty()) {
+                // 使用虚拟屏最新内容尺寸（与参考实现一致）
+                val (vw, vh) = VirtualDisplayController.getContentSizeBestEffort()
+                PhoneAgentAccessibilityService.ScreenshotData(
+                    base64Png = b64,
+                    width = vw,
+                    height = vh
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
     
     /**

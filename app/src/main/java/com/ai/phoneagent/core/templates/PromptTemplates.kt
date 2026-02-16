@@ -93,9 +93,10 @@ do(action="Tap", element=[500,150])
     fun buildActionRepairPrompt(failedAction: String): String {
         return """# 动作执行失败
 
-上一个动作：$failedAction
+上一个动作执行失败：$failedAction
 
-请直接输出正确的动作：
+请直接输出修复后的动作，不要输出其他文字。
+重要：不要编造用户没有说过的话，不要自行决定跳过或放弃当前任务。只需修复当前动作并继续执行。
 
 <answer>
 do(action="正确的动作")
@@ -103,6 +104,7 @@ do(action="正确的动作")
 
 修复建议：
 - 点击失败：调整坐标位置重试
+- 输入失败：先点击输入框再输入，或使用 Tap 点击输入框后再 Type
 - 页面未加载：Wait 等待
 - 找不到元素：滑动或返回上级页面""".trimIndent()
     }

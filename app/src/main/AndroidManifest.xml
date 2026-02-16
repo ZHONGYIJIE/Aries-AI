@@ -20,6 +20,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
+        android:name=".AriesAgentApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -57,6 +58,16 @@
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- 虚拟屏兜底 Activity：独立 taskAffinity，吞掉 Back 键防止虚拟屏黑屏 -->
+        <activity
+            android:name=".WelcomeActivity"
+            android:exported="true"
+            android:taskAffinity="${applicationId}.virtual"
+            android:excludeFromRecents="true"
+            android:allowEmbedded="true"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.PhoneAgent" />
+
         <!-- 悬浮聊天窗口服务 -->
         <service
             android:name=".FloatingChatService"
@@ -83,6 +94,15 @@
             android:name=".updates.UpdateHistoryActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- Shizuku Provider - 虚拟屏核心依赖 -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
     </application>
 

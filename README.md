@@ -135,6 +135,16 @@
 | [CODING_STANDARDS.md](./CODING_STANDARDS.md) | 代码规范、命名规则、注释要求 |
 | [GIT_WORKFLOW.md](./GIT_WORKFLOW.md) | Git 使用规范、分支管理、提交规范 |
 
+### 📚 文档中心（/docs）
+
+为提升前后端协作与 Agent 辅助编码效率，新增以下核心文档：
+
+| 文档 | 说明 |
+|------|------|
+| [docs/frontend-readme.md](./docs/frontend-readme.md) | 前端启动、联调、环境变量与协作规范 |
+| [docs/api-interface-spec.md](./docs/api-interface-spec.md) | 前后端接口契约、错误码、分页与版本规范 |
+| [docs/backend-technical-solution.md](./docs/backend-technical-solution.md) | 后端技术架构、工程治理与发布方案 |
+
 ```bash
 # 克隆项目
 git clone https://github.com/ZG0704666/Aries-AI.git

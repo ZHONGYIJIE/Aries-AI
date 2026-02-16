@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Aries AI - Android UI Automation Framework
  * Copyright (C) 2025-2026 ZG0704666
  *
@@ -18,6 +18,10 @@
 package com.ai.phoneagent
 
 import android.accessibilityservice.AccessibilityService
+import com.ai.phoneagent.PhoneAgentAccessibilityService
+import com.ai.phoneagent.ShizukuBridge
+import com.ai.phoneagent.VirtualDisplayController
+import com.ai.phoneagent.VirtualScreenPreviewOverlay
 import com.ai.phoneagent.core.agent.ParsedAgentAction
 import com.ai.phoneagent.core.cache.ScreenshotManager
 import com.ai.phoneagent.core.config.AgentConfiguration
@@ -94,16 +98,65 @@ class UiAutomationAgent(
             onLog: (String) -> Unit,
     ): AgentResult {
         val metrics = service.resources.displayMetrics
-        val screenW = metrics.widthPixels
-        val screenH = metrics.heightPixels
+        var screenW = metrics.widthPixels
+        var screenH = metrics.heightPixels
 
         // 初始化截图管理器
         screenshotManager = ScreenshotManager(config)
         
+        // 如果启用虚拟屏模式，先准备虚拟屏
+        if (config.useBackgroundVirtualDisplay) {
+            onLog("【虚拟屏模式】正在准备后台虚拟屏...")
+            val context = service as? android.content.Context 
+                ?: service.applicationContext
+            val displayId = VirtualDisplayController.prepareForTask(context, "")
+            if (displayId != null && displayId > 0) {
+                onLog("【虚拟屏模式】虚拟屏已准备就绪，displayId=$displayId")
+                val (vw, vh) = VirtualDisplayController.getContentSizeBestEffort(context)
+                if (vw > 0 && vh > 0) {
+                    screenW = vw
+                    screenH = vh
+                }
+            } else {
+                // 虚拟屏创建失败，直接报错退出，不降级到主屏幕
+                onLog("【虚拟屏模式】虚拟屏准备失败：Shizuku 未授权或创建失败")
+                return AgentResult(false, "虚拟屏模式启动失败：请确保已安装 Shizuku 并授予权限", 0)
+            }
+        }
+        
+        // try-finally 确保虚拟屏资源在任何退出路径下都被清理
+        try {
+        return runAgentLoop(apiKey, model, task, service, control, onLog, screenW, screenH)
+        } finally {
+            // 清理虚拟屏及预览悬浮窗
+            cleanupVirtualDisplay(service)
+        }
+    }
+    
+    /**
+     * Agent 主循环（从 run 抽出以支持 try-finally 清理）
+     */
+    private suspend fun runAgentLoop(
+            apiKey: String,
+            model: String,
+            task: String,
+            service: PhoneAgentAccessibilityService,
+            control: Control,
+            onLog: (String) -> Unit,
+            screenW: Int,
+            screenH: Int,
+    ): AgentResult {
         // 智能应用启动
         val smartLaunched = trySmartAppLaunch(task, service, onLog)
         if (smartLaunched) {
             onLog("✓ 应用已快速启动，继续后续操作...")
+        }
+        
+        // 虚拟屏模式：启动预览悬浮窗
+        if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()) {
+            onLog("【虚拟屏模式】启动预览悬浮窗...")
+            val ctx = service as? android.content.Context ?: service.applicationContext
+            VirtualScreenPreviewOverlay.show(ctx)
         }
 
         // 构建初始消息
@@ -121,12 +174,23 @@ class UiAutomationAgent(
         lastTapAction = null
 
         var step = 0
+        var currentScreenW = screenW
+        var currentScreenH = screenH
         
         while (step < config.maxSteps) {
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             awaitIfPaused(control)
             step++
             
+            // 虚拟屏模式下刷新当前内容尺寸，适配动态分辨率变化
+            if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()) {
+                val (vw, vh) = VirtualDisplayController.getContentSizeBestEffort(service)
+                if (vw > 0 && vh > 0) {
+                    currentScreenW = vw
+                    currentScreenH = vh
+                }
+            }
+
             // 更新进度
             AutomationOverlay.updateProgress(
                     step = step,
@@ -135,12 +199,22 @@ class UiAutomationAgent(
                     subtitle = "读取界面"
             )
             
+            // 严格隔离模式：截图阶段不抢焦点，避免主屏返回键误作用到虚拟屏
+            
             // 并行获取截图和UI树
             val (screenshot, rawUiDump) = coroutineScope {
                 val screenshotDeferred = async { 
                     screenshotManager?.getOptimizedScreenshot(service) 
                 }
-                val uiDumpDeferred = async { service.dumpUiTreeWithRetry(maxNodes = config.uiTreeMaxNodes) }
+                val uiDumpDeferred = async {
+                    if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()) {
+                        // 虚拟屏模式：纯视觉驱动，UI树置空
+                        // AccessibilityService 的 rootInActiveWindow 返回的是前台窗口的 UI 树，对虚拟屏无效
+                        "[虚拟屏模式-纯视觉驱动]"
+                    } else {
+                        service.dumpUiTreeWithRetry(maxNodes = config.uiTreeMaxNodes)
+                    }
+                }
                 Pair(screenshotDeferred.await(), uiDumpDeferred.await())
             }
             
@@ -314,7 +388,7 @@ class UiAutomationAgent(
                 val wasPreviousTap = lastActionWasTap
 
                 execOk = try {
-                            if (isTypeAction && wasPreviousTap) {
+                            val result = if (isTypeAction && wasPreviousTap) {
                         // 合并执行
                                 val previousTapAction = lastTapAction
                                 lastActionWasTap = false
@@ -327,12 +401,12 @@ class UiAutomationAgent(
                                         tapAction = previousTapAction,
                                         typeAction = currentAction,
                                         uiDump = uiDump,
-                                        screenW = screenW,
-                                        screenH = screenH,
+                                        screenW = currentScreenW,
+                                        screenH = currentScreenH,
                                         onLog = onLog
                                     )
                                 } else {
-                            actionExecutor.execute(currentAction, service, uiDump, screenW, screenH, onLog)
+                            actionExecutor.execute(currentAction, service, uiDump, currentScreenW, currentScreenH, onLog)
                                 }
                             } else {
                                 // 正常执行
@@ -343,8 +417,10 @@ class UiAutomationAgent(
                                     lastActionWasTap = false
                                     lastTapAction = null
                                 }
-                        actionExecutor.execute(currentAction, service, uiDump, screenW, screenH, onLog)
+                        actionExecutor.execute(currentAction, service, uiDump, currentScreenW, currentScreenH, onLog)
                             }
+
+                            result
                         } catch (e: TakeOverException) {
                             val msg = e.message.orEmpty().ifBlank { "需要用户接管" }
                             return AgentResult(false, msg, step)
@@ -448,6 +524,17 @@ class UiAutomationAgent(
         }
 
         return AgentResult(false, "达到最大步数限制（${config.maxSteps}）", config.maxSteps)
+    } // end of run()
+    
+    /**
+     * 清理虚拟屏及预览悬浮窗资源
+     */
+    private fun cleanupVirtualDisplay(service: PhoneAgentAccessibilityService) {
+        if (config.useBackgroundVirtualDisplay) {
+            val ctx = service as? android.content.Context ?: service.applicationContext
+            VirtualScreenPreviewOverlay.hide()
+            VirtualDisplayController.cleanup(ctx)
+        }
     }
 
     /**
@@ -522,22 +609,33 @@ class UiAutomationAgent(
         
         try {
             val beforeTime = service.lastWindowEventTime()
-            LaunchProxyActivity.launch(service, intent)
-            onLog("[⚡快速启动] 后台启动 ${matchedAppName}（无需连接模型，节省时间）")
-            // 等待更长时间确保应用加载完成
-            service.awaitWindowEvent(beforeTime, timeoutMs = config.appLaunchWaitTimeoutMs)
-            delay(config.appLaunchExtraDelayMs)
+            
+            if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()) {
+                // 虚拟屏模式：启动到虚拟屏（不切换系统焦点）
+                val displayId = VirtualDisplayController.getDisplayId() ?: -1
+                LaunchProxyActivity.launchOnDisplay(service, intent, displayId)
+                onLog("[⚡快速启动] 虚拟屏启动 ${matchedAppName}（displayId=$displayId）")
+                delay(config.appLaunchExtraDelayMs + 500) // 虚拟屏启动需要稍长时间
+                // 启动完成后立即把系统焦点还给主屏（系统可能因 Activity 创建自动切焦）
+                VirtualDisplayController.restoreFocusToDefaultDisplayNow()
+            } else {
+                // 前台模式
+                LaunchProxyActivity.launch(service, intent)
+                onLog("[⚡快速启动] 后台启动 ${matchedAppName}（无需连接模型，节省时间）")
+                service.awaitWindowEvent(beforeTime, timeoutMs = config.appLaunchWaitTimeoutMs)
+                delay(config.appLaunchExtraDelayMs)
+                
+                // 验证应用是否真的启动了
+                val newApp = service.currentAppPackage()
+                if (newApp != resolvedPackage) {
+                    onLog("[⚡快速启动] ${matchedAppName} 启动验证失败（当前：$newApp），将在后续步骤中处理")
+                } else {
+                    onLog("[⚡快速启动] ${matchedAppName} 启动成功，继续后续操作...")
+                }
+            }
             
             // 清理截图缓存，确保获取最新的应用界面截图
             screenshotManager?.clear()
-            
-            // 验证应用是否真的启动了
-            val newApp = service.currentAppPackage()
-            if (newApp != resolvedPackage) {
-                onLog("[⚡快速启动] ${matchedAppName} 启动验证失败（当前：$newApp），将在后续步骤中处理")
-            } else {
-                onLog("[⚡快速启动] ${matchedAppName} 启动成功，继续后续操作...")
-            }
             return true
         } catch (e: Exception) {
             onLog("[⚡快速启动] 启动失败: ${e.message}")
@@ -572,12 +670,27 @@ class UiAutomationAgent(
         val (x, y) = ActionUtils.parsePointToScreen(element, screenW, screenH)
         onLog("[合并执行] Tap(${element.first},${element.second}) + Type(${inputText.take(config.logCombineInputTextTruncateLength)})")
 
+        val isVdMode = config.useBackgroundVirtualDisplay
+                && VirtualDisplayController.shouldUseVirtualDisplay
+                && VirtualDisplayController.isVirtualDisplayStarted()
+        
+        if (isVdMode) {
+            // 虚拟屏模式：先注入点击，再输入文本（不切换系统焦点）
+            val displayId = VirtualDisplayController.getDisplayId() ?: -1
+            VirtualDisplayController.injectTapBestEffort(displayId, x.toInt(), y.toInt())
+            delay(config.tapTypeCombineKeyboardWaitMs)
+            
+            val result = actionExecutor.injectTextOnVirtualDisplay(displayId, inputText, onLog)
+            return result
+        }
+
+        // 前台模式
         // 隐藏悬浮窗
         AutomationOverlay.temporaryHide()
         delay(30)
 
         // 执行点击
-        val clickOk = service.clickAwait(x, y)
+        val clickOk = service.clickAwait(x.toFloat(), y.toFloat())
         if (!clickOk) {
             AutomationOverlay.restoreVisibility()
             return false

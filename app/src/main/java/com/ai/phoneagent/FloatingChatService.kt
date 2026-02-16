@@ -40,6 +40,7 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.animation.PathInterpolator
 import android.view.animation.DecelerateInterpolator
@@ -51,6 +52,7 @@ import com.ai.phoneagent.helper.StreamRenderHelper
 import com.ai.phoneagent.net.AutoGlmClient
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -67,7 +69,7 @@ import kotlinx.coroutines.*
 
 /**
  * 悬浮聊天窗口服务
- * 提供小窗模式的聊天界面
+ * 提供小窗模式的聊天界面和虚拟屏工具箱模式
  */
 class FloatingChatService : Service() {
 
@@ -79,6 +81,15 @@ class FloatingChatService : Service() {
         private const val LAUNCH_PROXY_EXTRA_TARGET_INTENT = "target_intent"
 
         const val ACTION_FLOATING_RETURNED = "com.ai.phoneagent.action.FLOATING_RETURNED"
+
+        // 工具箱模式启动 Intent Key
+        const val EXTRA_TOOLBOX_MODE = "toolbox_mode"
+
+        // 悬浮窗模式
+        enum class FloatingMode {
+            CHAT,           // 聊天模式（原有）
+            TOOLBOX         // 工具箱模式（虚拟屏预览）
+        }
         
         @Volatile
         private var instance: FloatingChatService? = null
@@ -127,6 +138,45 @@ class FloatingChatService : Service() {
          */
         fun stop(context: Context) {
             context.stopService(Intent(context, FloatingChatService::class.java))
+        }
+
+        /**
+         * 以工具箱模式启动悬浮窗服务（虚拟屏预览）
+         */
+        fun startAsToolbox(
+            context: Context,
+            fromX: Float = 100f,
+            fromY: Float = 200f,
+            fromWidth: Float = 240f,
+            fromHeight: Float = 480f,
+            showDelayMs: Long = 80L,
+        ) {
+            if (!hasOverlayPermission(context)) return
+            val intent = Intent(context, FloatingChatService::class.java).apply {
+                putExtra(EXTRA_TOOLBOX_MODE, true)
+                putExtra("from_x", fromX)
+                putExtra("from_y", fromY)
+                putExtra("from_width", fromWidth)
+                putExtra("from_height", fromHeight)
+                putExtra("show_delay_ms", showDelayMs)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        // 工具箱进度更新回调
+        @Volatile
+        private var toolboxProgressListener: ((Int, Int, String) -> Unit)? = null
+
+        fun setToolboxProgressListener(listener: ((Int, Int, String) -> Unit)?) {
+            toolboxProgressListener = listener
+        }
+
+        fun updateToolboxProgress(step: Int, total: Int, description: String) {
+            toolboxProgressListener?.invoke(step, total, description)
         }
         
         /**
@@ -183,7 +233,14 @@ class FloatingChatService : Service() {
     // 消息列表
     private val messages = mutableListOf<String>()
     private val chatHistory = mutableListOf<ChatRequestMessage>()  // 用于 AI 对话上下文
-    
+
+    // 工具箱模式相关
+    private var isToolboxMode: Boolean = false
+    private var toolboxView: View? = null
+    private var currentToolboxStep: Int = 0
+    private var totalToolboxSteps: Int = 0
+    private var currentToolboxDescription: String = ""
+
     // 回调
     var onExpandToFullScreen: (() -> Unit)? = null
     var onClose: (() -> Unit)? = null
@@ -263,15 +320,25 @@ class FloatingChatService : Service() {
         intent?.let {
             val density = resources.displayMetrics.density
 
+            // 读取工具箱模式标志
+            isToolboxMode = it.getBooleanExtra(EXTRA_TOOLBOX_MODE, false)
+
             targetX = it.getFloatExtra("from_x", 100f).toInt()
             targetY = it.getFloatExtra("from_y", 200f).toInt()
-            windowWidth = (it.getFloatExtra("from_width", 320f * density) / density).toInt()
-            windowHeight = (it.getFloatExtra("from_height", 400f * density) / density).toInt()
+
+            // 工具箱模式使用不同的默认尺寸
+            if (isToolboxMode) {
+                windowWidth = (it.getFloatExtra("from_width", 240f * density) / density).toInt()
+                windowHeight = (it.getFloatExtra("from_height", 480f * density) / density).toInt()
+            } else {
+                windowWidth = (it.getFloatExtra("from_width", 320f * density) / density).toInt()
+                windowHeight = (it.getFloatExtra("from_height", 400f * density) / density).toInt()
+            }
 
             showDelayMs = it.getLongExtra("show_delay_ms", 0L)
         }
-        
-        // 显示悬浮窗
+
+        // 显示悬浮窗（根据模式选择显示聊天或工具箱）
         if (showDelayMs > 0) {
             mainHandler.postDelayed({ showFloatingWindow() }, showDelayMs)
         } else {
@@ -610,9 +677,6 @@ class FloatingChatService : Service() {
         if (isViewAdded) return
         if (!Settings.canDrawOverlays(this)) return
 
-        val inflater = LayoutInflater.from(this)
-        floatingView = inflater.inflate(R.layout.floating_chat_window, null)
-
         val density = resources.displayMetrics.density
         val widthPx = (windowWidth * density).toInt()
         val heightPx = (windowHeight * density).toInt()
@@ -638,12 +702,37 @@ class FloatingChatService : Service() {
         windowX = startX
         windowY = startY
 
-        setupFloatingView()
+        // 根据模式选择显示聊天视图或工具箱视图
+        if (isToolboxMode) {
+            showToolboxWindow()
+        } else {
+            showChatWindow()
+        }
 
+        // 播放入场动画
+        animateWindowEntry(startX, startY, endX, endY)
+    }
+
+    // 显示聊天窗口（原有逻辑）
+    private fun showChatWindow() {
+        val inflater = LayoutInflater.from(this)
+        floatingView = inflater.inflate(R.layout.floating_chat_window, null)
+        setupFloatingView()
         windowManager.addView(floatingView, layoutParams)
         isViewAdded = true
+    }
 
-        val view = floatingView ?: return
+    // 显示工具箱窗口（虚拟屏预览）
+    private fun showToolboxWindow() {
+        // 使用虚拟屏预览功能创建工具箱视图
+        toolboxView = createToolboxView()
+        windowManager.addView(toolboxView, layoutParams)
+        isViewAdded = true
+    }
+
+    // 窗口入场动画
+    private fun animateWindowEntry(startX: Int, startY: Int, endX: Int, endY: Int) {
+        val view = (if (isToolboxMode) toolboxView else floatingView) ?: return
         view.alpha = 0f
         view.scaleX = 0.2f
         view.scaleY = 0.2f
@@ -1422,6 +1511,7 @@ class FloatingChatService : Service() {
     }
     
     private fun hideFloatingWindow() {
+        // 隐藏聊天视图
         if (isViewAdded && floatingView != null) {
             try {
                 windowManager.removeView(floatingView)
@@ -1429,9 +1519,232 @@ class FloatingChatService : Service() {
                 // ignore
             }
             floatingView = null
-            isViewAdded = false
+        }
+        // 隐藏工具箱视图
+        if (isViewAdded && toolboxView != null) {
+            try {
+                windowManager.removeView(toolboxView)
+            } catch (e: Exception) {
+                // ignore
+            }
+            toolboxView = null
+        }
+        isViewAdded = false
+    }
+
+    // ============================================================
+    // 工具箱模式方法
+    // ============================================================
+
+    /**
+     * 创建工具箱视图（虚拟屏预览）
+     */
+    private fun createToolboxView(): View {
+        val context = this
+        val density = resources.displayMetrics.density
+
+        // 计算尺寸
+        val widthPx = (windowWidth * density).toInt()
+        val headerHeight = (28 * density).toInt()
+        val controlBarHeight = (40 * density).toInt()
+        val previewHeight = widthPx * 16 / 9  // 16:9 比例
+
+        // 根容器
+        val container = FrameLayout(context).apply {
+            layoutParams = ViewGroup.LayoutParams(widthPx, previewHeight + headerHeight + controlBarHeight)
+        }
+
+        // 1. 标题栏
+        val header = FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, headerHeight)
+            setBackgroundColor(android.graphics.Color.argb(200, 40, 50, 70))
+        }
+
+        // 标题栏：拖动手柄
+        val handleIcon = TextView(context).apply {
+            text = "▼"
+            textSize = 10f
+            setTextColor(android.graphics.Color.argb(150, 255, 255, 255))
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
+                gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                marginStart = (8 * density).toInt()
+            }
+        }
+        header.addView(handleIcon)
+
+        // 标题栏：标题文字
+        val titleText = TextView(context).apply {
+            text = "虚拟屏工具箱"
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 12f
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
+                gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                marginStart = (24 * density).toInt()
+            }
+        }
+        header.addView(titleText)
+
+        // 标题栏：关闭按钮
+        val closeBtn = TextView(context).apply {
+            text = "✕"
+            textSize = 14f
+            setTextColor(android.graphics.Color.argb(200, 255, 255, 255))
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams((28 * density).toInt(), FrameLayout.LayoutParams.MATCH_PARENT).apply {
+                gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            }
+            setOnClickListener {
+                // 关闭虚拟屏并停止服务
+                closeWindow()
+            }
+        }
+        header.addView(closeBtn)
+
+        // 2. 预览区域（虚拟屏画面）
+        val previewContainer = FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, previewHeight).apply {
+                topMargin = headerHeight
+            }
+            setBackgroundColor(android.graphics.Color.argb(230, 20, 20, 25))
+        }
+
+        // 添加虚拟屏 TextureView 占位（实际由 VirtualScreenPreviewOverlay 绑定）
+        val previewPlaceholder = TextView(context).apply {
+            text = "📱 虚拟屏预览"
+            textSize = 14f
+            setTextColor(android.graphics.Color.argb(150, 200, 200, 200))
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+        previewContainer.addView(previewPlaceholder)
+
+        // 关键：完全隔离 - 禁止用户触摸注入虚拟屏
+        // 预览区域拦截所有触摸事件，用户无法操作虚拟屏
+        previewContainer.setOnTouchListener { _, _ ->
+            // 拦截所有触摸事件，不传递到虚拟屏
+            true
+        }
+
+        // 点击预览区域跳转到任务详情（代替触摸注入）
+        previewContainer.setOnClickListener {
+            navigateToTaskDetail()
+        }
+
+        // 3. 状态条（步骤进度）
+        val statusBar = TextView(context).apply {
+            text = "📍 等待任务开始..."
+            setTextColor(android.graphics.Color.argb(200, 180, 180, 180))
+            textSize = 11f
+            setBackgroundColor(android.graphics.Color.argb(100, 0, 0, 0))
+            setPadding((8 * density).toInt(), (4 * density).toInt(), (8 * density).toInt(), (4 * density).toInt())
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.BOTTOM
+                bottomMargin = controlBarHeight
+            }
+        }
+        previewContainer.addView(statusBar)
+
+        // 4. 控制栏
+        val controlBar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(android.graphics.Color.argb(220, 35, 35, 45))
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, controlBarHeight).apply {
+                gravity = Gravity.BOTTOM
+            }
+            setPadding((4 * density).toInt(), 0, (4 * density).toInt(), 0)
+        }
+
+        // 控制按钮辅助函数
+        fun makeCtrlBtn(label: String, flex: Float = 1f, onClick: () -> Unit): TextView {
+            return TextView(context).apply {
+                text = label
+                setTextColor(android.graphics.Color.WHITE)
+                textSize = 10f
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, flex)
+                setOnClickListener { onClick() }
+                isClickable = true
+                isFocusable = true
+            }
+        }
+
+        // 返回按钮
+        controlBar.addView(makeCtrlBtn("◀ 返回") {
+            val did = VirtualDisplayController.getDisplayId() ?: return@makeCtrlBtn
+            VirtualDisplayController.injectBackBestEffort(did)
+        })
+
+        // Home 按钮
+        controlBar.addView(makeCtrlBtn("● Home") {
+            val did = VirtualDisplayController.getDisplayId() ?: return@makeCtrlBtn
+            VirtualDisplayController.injectHomeBestEffort(did)
+        })
+
+        // 暂停/继续按钮
+        controlBar.addView(makeCtrlBtn("⏸ 暂停") {
+            // TODO: 实现暂停/继续功能
+            Toast.makeText(context, "暂停功能", Toast.LENGTH_SHORT).show()
+        })
+
+        // 停止按钮
+        controlBar.addView(makeCtrlBtn("⏹ 停止") {
+            // 清理虚拟屏并关闭
+            VirtualDisplayController.cleanupAsync(context)
+            closeWindow()
+        })
+
+        // 组装视图
+        container.addView(header)
+        container.addView(previewContainer)
+        container.addView(controlBar)
+
+        // 设置拖拽行为
+        setupDragBehavior(header)
+
+        // 点击标题栏跳转到任务详情
+        header.setOnClickListener {
+            navigateToTaskDetail()
+        }
+
+        return container
+    }
+
+    /**
+     * 更新工具箱步骤显示
+     */
+    fun updateToolboxProgress(step: Int, total: Int, description: String) {
+        currentToolboxStep = step
+        totalToolboxSteps = total
+        currentToolboxDescription = description
+
+        // 查找状态条并更新
+        toolboxView?.let { view ->
+            val statusBar = view.findViewById<TextView>(android.R.id.text1)
+            view.post {
+                statusBar?.text = "📍 第 $step/$total 步：$description"
+            }
         }
     }
+
+    /**
+     * 跳转到任务详情页面
+     */
+    private fun navigateToTaskDetail() {
+        // 关闭悬浮窗
+        closeWindow()
+
+        // 跳转到 AutomationActivityNew
+        val intent = Intent(this, AutomationActivityNew::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra(AutomationActivityNew.EXTRA_FORCE_TOP_ON_ENTRY, true)
+        }
+        startActivity(intent)
+    }
+
+    // ============================================================
     
     private fun saveWindowState() {
         prefs.edit()

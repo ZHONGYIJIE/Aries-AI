@@ -42,6 +42,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 class PhoneAgentAccessibilityService : AccessibilityService() {
 
     companion object {
+        private const val TAG_KEYEVENT = "VdKeyEventFilter"
+        
         @Volatile var instance: PhoneAgentAccessibilityService? = null
         
         // 截图压缩配置
@@ -130,6 +132,37 @@ class PhoneAgentAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         instance = null
         super.onDestroy()
+    }
+
+    /**
+     * 系统按键事件处理（完全隔离模式）。
+     *
+     * 焦点隔离策略下，焦点始终保持在主屏（display 0）：
+     * - 用户的物理按键/手势自然只作用于主屏
+     * - 虚拟屏的返回/Home 由程序通过 displayId 定向注入
+     *
+     * 此处仅作为最后防线：如果系统因某种原因将焦点切到了虚拟屏，
+     * 拦截返回键并立即恢复焦点到主屏，防止意外操作虚拟屏。
+     */
+    override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
+        if (event == null) return false
+        if (!VirtualDisplayController.isVirtualDisplayStarted()) return false
+
+        val keyCode = event.keyCode
+        if (keyCode != android.view.KeyEvent.KEYCODE_BACK &&
+            keyCode != android.view.KeyEvent.KEYCODE_HOME &&
+            keyCode != 187) {
+            return false
+        }
+
+        // 检测到焦点可能在虚拟屏上（因为我们收到了应该只在主屏处理的按键）
+        // 立即恢复焦点到主屏
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+            runCatching { VirtualDisplayController.restoreFocusToDefaultDisplayNow() }
+        }
+
+        // 放行按键，让主屏正常处理（焦点已恢复到主屏）
+        return false
     }
 
     data class ScreenshotData(

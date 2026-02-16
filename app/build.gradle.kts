@@ -91,6 +91,13 @@ configurations.all {
 }
 
 dependencies {
+    // Shizuku - 虚拟屏核心依赖
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+
+    // HiddenApiBypass - 放宽隐藏 API 限制（虚拟屏创建必需）
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
@@ -115,7 +122,7 @@ dependencies {
     implementation("io.noties.markwon:core:4.6.2")
     implementation("io.noties.markwon:ext-strikethrough:4.6.2")
     implementation("io.noties.markwon:ext-tables:4.6.2")
-    implementation("io.noties.markwon:syntax-highlight:4.6.2") // prism4j 已作为传递依赖，无需重复声明
+    implementation("io.noties.markwon:syntax-highlight:4.6.2")
 
     // 显式添加单一版本的 annotations，供 Kotlin/Markwon 等使用
     implementation("org.jetbrains:annotations:23.0.0")

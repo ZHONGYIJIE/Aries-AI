@@ -38,6 +38,14 @@ package com.ai.phoneagent.core.config
 data class AgentConfiguration(
     // ========== 执行参数 ==========
     /**
+     * 是否使用后台虚拟屏模式执行
+     * 
+     * true: 在后台虚拟屏执行自动化任务，不影响前台
+     * false: 在前台执行，用户可以看到操作过程
+     */
+    val useBackgroundVirtualDisplay: Boolean = false,
+    
+    /**
      * 最大执行步数。
      *
      * 作用：限制单次任务的最长链路，防止模型在错误 UI 上无限循环。

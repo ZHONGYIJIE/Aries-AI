@@ -1,5 +1,5 @@
 # Ignore all temp assets and tool copies
-/temp   
+/temp
 #语音模型
 /app/src/main/assets
 *.iml
@@ -73,3 +73,12 @@ PROGRESS_ANALYSIS.md
 北京出差汇报_20260130.md
 Aries AI对齐Operit方案 - 详细TODO清单.md
 
+docs/VIRTUAL_DISPLAY_FOCUS_ISOLATION_ANALYSIS.md
+docs/VIRTUAL_DISPLAY_FOCUS_SOLUTION_SUMMARY.md
+docs/VIRTUAL_DISPLAY_FOCUS_TESTING.md
+.gitignore
+.trae/documents/虚拟屏幕后台执行问题全面分析与修复方案.md
+docs/api-interface-spec.md
+docs/backend-technical-solution.md
+docs/frontend-readme.md
+docs/reference-architecture.md

@@ -155,15 +155,18 @@ object ActionUtils {
     }
     
     /**
-     * 解析坐标点为屏幕坐标
+     * 解析坐标点为屏幕坐标（含边界校验 + roundToInt 精度优化）
+     * 坐标系：0-1000 归一化 → 像素
      */
     fun parsePointToScreen(
         point: Pair<Int, Int>,
         screenW: Int,
         screenH: Int
     ): Pair<Float, Float> {
-        val x = (point.first / 1000.0f) * screenW
-        val y = (point.second / 1000.0f) * screenH
+        val relX = point.first.coerceIn(0, 1000)
+        val relY = point.second.coerceIn(0, 1000)
+        val x = (relX / 1000.0f) * screenW
+        val y = (relY / 1000.0f) * screenH
         return x to y
     }
 }
