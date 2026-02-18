@@ -49,11 +49,11 @@
   function getStoredTheme() {
     const saved = localStorage.getItem('theme');
     if (saved === 'dark' || saved === 'light') return saved;
-    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    return 'dark';
   }
 
   function toggleTheme() {
-    const current = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+    const current = getStoredTheme();
     const next = current === 'dark' ? 'light' : 'dark';
     localStorage.setItem('theme', next);
     applyThemeClass(next);
@@ -107,9 +107,7 @@
     qqLink.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(ARIES_DATA.qqGroupId);
-      } catch (_) {
-        // ignore
-      }
+      } catch (_) {}
       window.open(ARIES_DATA.qqJoinUrl, '_blank', 'noopener');
     });
   }
@@ -588,22 +586,21 @@
       }
     );
 
-    elements.forEach((el) => observer.observe(el));
+    elements.forEach((el, index) => {
+      el.style.transitionDelay = `${index * 0.1}s`;
+      observer.observe(el);
+    });
   }
 
   function initSmoothScroll() {
     document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
       anchor.addEventListener('click', function (e) {
         const href = this.getAttribute('href');
-        if (href === '#') return;
+        if (!href || href === '#') return;
         const target = document.querySelector(href);
-        if (target) {
-          e.preventDefault();
-          target.scrollIntoView({
-            behavior: 'smooth',
-            block: 'start',
-          });
-        }
+        if (!target) return;
+        e.preventDefault();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     });
   }
