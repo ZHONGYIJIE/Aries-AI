@@ -98,6 +98,12 @@ import android.view.WindowManager
 import android.graphics.drawable.ColorDrawable
 import android.view.ViewAnimationUtils
 import android.text.Html
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import com.ai.phoneagent.ui.inputbar.InputState
+import com.ai.phoneagent.ui.inputbar.KimiInputBar
+import androidx.compose.runtime.*
+import androidx.compose.material3.MaterialTheme
 
 class MainActivity : AppCompatActivity() {
 
@@ -170,6 +176,10 @@ class MainActivity : AppCompatActivity() {
 
     private val permGuideShownPref = "perm_guide_shown"
 
+    private val inputTextState = mutableStateOf("")
+    private val inputBarState = mutableStateOf<InputState>(InputState.Idle)
+    private val voiceAmplitudeState = mutableStateOf(0f)
+
     @Volatile private var suppressApiInputWatcher: Boolean = false
     @Volatile private var apiNeedsRecheckToastShown: Boolean = false
 
@@ -232,9 +242,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.topAppBar.post { attachAnimatedBorderRing(binding.topAppBar, 2f, 18f) }
-        binding.inputContainer.post { attachAnimatedBorderRing(binding.inputContainer, 2f, 20f) }
-
-        binding.btnVoice.isEnabled = true
 
         initSherpaModel()
 
@@ -1279,86 +1286,82 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupInputBar() {
+        binding.inputBarCompose.apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                MaterialTheme {
+                    val text by remember { inputTextState }
+                    val state by remember { inputBarState }
+                    val amplitude by remember { voiceAmplitudeState }
 
-        binding.btnSend.setOnClickListener {
-            vibrateLight()
-            if (isListening || voiceInputAnimJob != null) {
-                pendingSendAfterVoice = true
-                hideKeyboard()
-                stopLocalVoiceInput(triggerRecognizerStop = true)
-                return@setOnClickListener
-            }
-
-            val text = binding.inputMessage.text.toString().trim()
-
-            if (text.isBlank()) {
-
-                Toast.makeText(this, "请输入内容", Toast.LENGTH_SHORT).show()
-
-                return@setOnClickListener
-            }
-
-            hideKeyboard()
-            sendMessage(text)
-        }
-
-        binding.btnVoice.setOnClickListener {
-            vibrateLight()
-            if (isListening) {
-
-                stopLocalVoiceInput()
-            } else {
-
-                ensureAudioPermission { startLocalVoiceInput() }
-            }
-        }
-
-        binding.inputMessage.addTextChangedListener(
-                object : TextWatcher {
-
-                    override fun onTextChanged(
-                            s: CharSequence?,
-                            start: Int,
-                            before: Int,
-                            count: Int
-                    ) {
-
-                        binding.inputBar.requestLayout()
-                    }
-
-                    override fun beforeTextChanged(
-                            s: CharSequence?,
-                            start: Int,
-                            count: Int,
-                            after: Int
-                    ) {}
-
-                    override fun afterTextChanged(s: Editable?) {}
+                    KimiInputBar(
+                        state = state,
+                        text = text,
+                        onTextChange = { inputTextState.value = it },
+                        onSend = {
+                            vibrateLight()
+                            val t = inputTextState.value.trim()
+                            if (t.isNotBlank()) {
+                                hideKeyboard()
+                                sendMessage(t)
+                            } else {
+                                Toast.makeText(this@MainActivity, "请输入内容", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onVoiceStart = {
+                            vibrateLight()
+                            ensureAudioPermission { 
+                                inputBarState.value = InputState.VoiceRecording()
+                                startLocalVoiceInput() 
+                            }
+                        },
+                        onVoiceEnd = {
+                            vibrateLight()
+                            inputBarState.value = InputState.Idle
+                            stopLocalVoiceInput()
+                        },
+                        onVoiceCancel = {
+                            vibrateLight()
+                            inputBarState.value = InputState.VoiceIdle
+                            stopLocalVoiceInput()
+                        },
+                        onAttachmentClick = {
+                            Toast.makeText(this@MainActivity, "附件功能开发中", Toast.LENGTH_SHORT).show()
+                        },
+                        onAgentClick = {
+                            Toast.makeText(this@MainActivity, "Agent 功能开发中", Toast.LENGTH_SHORT).show()
+                        },
+                        onModelSelect = {
+                            Toast.makeText(this@MainActivity, "模型选择器已打开", Toast.LENGTH_SHORT).show()
+                        },
+                        onModeChange = { isVoice ->
+                            vibrateLight()
+                            inputBarState.value = if (isVoice) InputState.VoiceIdle else InputState.Idle
+                            if (isVoice) {
+                                hideKeyboard()
+                            }
+                        },
+                        voiceAmplitude = amplitude,
+                        onUpdateCancelState = { isCancelling ->
+                            val current = inputBarState.value
+                            if (current is InputState.VoiceRecording) {
+                                if (current.isCancelling != isCancelling) {
+                                    inputBarState.value = current.copy(isCancelling = isCancelling)
+                                    // 震动反馈当状态改变时
+                                    vibrateLight()
+                                }
+                            }
+                        }
+                    )
                 }
-        )
-
-        // 部分设备从后台返回后首次点击输入框不弹出键盘，这里在触摸时主动请求焦点并唤起软键盘
-        binding.inputMessage.setOnTouchListener { v, event ->
-            if (event.action == MotionEvent.ACTION_DOWN && !binding.inputMessage.isFocused) {
-                binding.inputMessage.requestFocus()
-                binding.inputMessage.post {
-                    val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                    imm.showSoftInput(binding.inputMessage, InputMethodManager.SHOW_IMPLICIT)
-                }
             }
-            // 返回 false 让 EditText 继续处理点击（光标、选择等）
-            false
         }
     }
 
     private fun hideKeyboard() {
-
-        val imm =
-                getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as InputMethodManager
-
-        imm.hideSoftInputFromWindow(binding.inputMessage.windowToken, 0)
-
-        binding.inputMessage.clearFocus()
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(binding.inputBarCompose.windowToken, 0)
+        binding.inputBarCompose.clearFocus()
     }
 
     private fun elevateAiBar() {
@@ -1551,7 +1554,7 @@ class MainActivity : AppCompatActivity() {
                 FloatingChatService.getInstance()?.addMessage("我: $text", isUser = true)
             }
 
-            binding.inputMessage.text?.clear()
+            inputTextState.value = ""
         }
 
         // 移除旧的思考中提示
@@ -2271,13 +2274,12 @@ class MainActivity : AppCompatActivity() {
     /** 启动"正在语音输入..."的点动画 */
     private fun startVoiceInputAnimation() {
         voiceInputAnimJob?.cancel()
-        savedInputText = binding.inputMessage.text?.toString().orEmpty()
+        savedInputText = inputTextState.value
         voiceInputAnimJob = lifecycleScope.launch {
             var dotCount = 1
             while (true) {
                 val dots = ".".repeat(dotCount)
-                binding.inputMessage.setText("正在语音输入$dots")
-                binding.inputMessage.setSelection(binding.inputMessage.text?.length ?: 0)
+                inputTextState.value = "正在语音输入$dots"
                 dotCount = if (dotCount >= 3) 1 else dotCount + 1
                 delay(400)
             }
@@ -2294,12 +2296,13 @@ class MainActivity : AppCompatActivity() {
         val recognizer = sherpaSpeechRecognizer
         if (recognizer == null || !recognizer.isReady()) {
             Toast.makeText(this, "模型加载中…", Toast.LENGTH_SHORT).show()
+            inputBarState.value = InputState.Idle
             return
         }
 
         if (isListening) return
 
-        voicePrefix = binding.inputMessage.text?.toString().orEmpty().trim().let { prefix ->
+        voicePrefix = inputTextState.value.trim().let { prefix ->
             if (prefix.isBlank()) "" else if (prefix.endsWith(" ")) prefix else "$prefix "
         }
 
@@ -2311,9 +2314,9 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     // 有识别结果时，停止动画并显示实际文字
                     stopVoiceInputAnimation()
+                    inputBarState.value = InputState.VoiceRecognizing
                     val txt = (voicePrefix + text).trimStart()
-                    binding.inputMessage.setText(txt)
-                    binding.inputMessage.setSelection(binding.inputMessage.text?.length ?: 0)
+                    inputTextState.value = txt
                 }
             }
 
@@ -2321,8 +2324,13 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     stopVoiceInputAnimation()
                     val txt = (voicePrefix + text).trimStart()
-                    binding.inputMessage.setText(txt)
-                    binding.inputMessage.setSelection(binding.inputMessage.text?.length ?: 0)
+                    inputTextState.value = txt
+                }
+            }
+
+            override fun onAmplitude(amplitude: Float) {
+                runOnUiThread {
+                    voiceAmplitudeState.value = amplitude
                 }
             }
 
@@ -2330,15 +2338,15 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     stopVoiceInputAnimation()
                     val txt = (voicePrefix + text).trimStart()
-                    binding.inputMessage.setText(if (txt.isBlank()) savedInputText else txt)
-                    binding.inputMessage.setSelection(binding.inputMessage.text?.length ?: 0)
+                    inputTextState.value = if (txt.isBlank()) savedInputText else txt
 
                     val shouldSend = pendingSendAfterVoice
                     pendingSendAfterVoice = false
+                    inputBarState.value = InputState.VoiceIdle
                     stopLocalVoiceInput(triggerRecognizerStop = false)
 
                     if (shouldSend) {
-                        val toSend = binding.inputMessage.text.toString().trim()
+                        val toSend = inputTextState.value.trim()
                         if (toSend.isBlank()) {
                             Toast.makeText(this@MainActivity, "请输入内容", Toast.LENGTH_SHORT).show()
                             return@runOnUiThread
@@ -2353,9 +2361,10 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     stopVoiceInputAnimation()
                     // 恢复原来的文字
-                    binding.inputMessage.setText(savedInputText)
+                    inputTextState.value = savedInputText
                     Toast.makeText(this@MainActivity, "识别失败: ${exception.message}", Toast.LENGTH_SHORT).show()
                     pendingSendAfterVoice = false
+                    inputBarState.value = InputState.VoiceIdle
                     stopLocalVoiceInput(triggerRecognizerStop = false)
                 }
             }
@@ -2364,26 +2373,25 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     stopVoiceInputAnimation()
                     // 恢复原来的文字
-                    binding.inputMessage.setText(savedInputText)
+                    inputTextState.value = savedInputText
                     Toast.makeText(this@MainActivity, "语音识别超时", Toast.LENGTH_SHORT).show()
                     pendingSendAfterVoice = false
+                    inputBarState.value = InputState.VoiceIdle
                     stopLocalVoiceInput(triggerRecognizerStop = false)
                 }
             }
         })
 
         isListening = true
-        startMicAnimation()
     }
 
     private fun stopLocalVoiceInput(triggerRecognizerStop: Boolean = true) {
         val recognizer = sherpaSpeechRecognizer
         stopVoiceInputAnimation()
 
-        val currentText = binding.inputMessage.text?.toString().orEmpty()
+        val currentText = inputTextState.value
         if (currentText.startsWith("正在语音输入")) {
-            binding.inputMessage.setText(savedInputText)
-            binding.inputMessage.setSelection(binding.inputMessage.text?.length ?: 0)
+            inputTextState.value = savedInputText
         }
 
         if (triggerRecognizerStop) {
@@ -2397,44 +2405,14 @@ class MainActivity : AppCompatActivity() {
             recognizer?.cancel()
         }
         isListening = false
-        stopMicAnimation()
     }
 
     private fun startMicAnimation() {
-
-        if (micAnimator != null) return
-
-        val sx = PropertyValuesHolder.ofFloat(View.SCALE_X, 1f, 1.18f)
-
-        val sy = PropertyValuesHolder.ofFloat(View.SCALE_Y, 1f, 1.18f)
-
-        val a = PropertyValuesHolder.ofFloat(View.ALPHA, 1f, 0.75f)
-
-        micAnimator =
-                ObjectAnimator.ofPropertyValuesHolder(binding.btnVoice, sx, sy, a).apply {
-                    duration = 520
-
-                    repeatCount = ObjectAnimator.INFINITE
-
-                    repeatMode = ObjectAnimator.REVERSE
-
-                    interpolator = LinearInterpolator()
-
-                    start()
-                }
+        // Compose UI handles its own animations via state
     }
 
     private fun stopMicAnimation() {
-
-        micAnimator?.cancel()
-
-        micAnimator = null
-
-        binding.btnVoice.scaleX = 1f
-
-        binding.btnVoice.scaleY = 1f
-
-        binding.btnVoice.alpha = 1f
+        // Compose UI handles its own animations via state
     }
 
     private fun ensureAudioPermission(onGranted: () -> Unit) {
