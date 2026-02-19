@@ -44,8 +44,9 @@ private val ColorRedCancel = Color(0xFFFF3B30)
 private val ColorWhite = Color.White
 private val ColorOverlayMask = Color(0x99FFFFFF) // 半透明白色遮罩，让背景模糊隐约可见
 
+@OptIn(ExperimentalAnimationApi::class)
 @Composable
-fun KimiInputBar(
+fun InputBar(
     state: InputState,
     text: String,
     onTextChange: (String) -> Unit,
@@ -116,47 +117,61 @@ fun KimiInputBar(
                         .heightIn(min = 48.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isVoiceMode) {
-                        // 语音模式：显示"按住说话"按钮
-                        Text(
-                            text = "按住说话",
-                            style = TextStyle(
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = ColorTextMain
-                            )
-                        )
-                        
-                        // 覆盖透明的触摸区域来处理长按逻辑
-                        VoiceRecordButtonHandler(
-                            onPressStart = onVoiceStart,
-                            onPressEnd = onVoiceEnd,
-                            onCancel = onVoiceCancel,
-                            onOffsetChange = { offsetY, _ -> 
-                                val isCancelling = offsetY < -150f 
-                                onUpdateCancelState(isCancelling)
-                            }
-                        )
-                    } else {
-                        // 文本模式：显示输入框
-                        Box(
-                            contentAlignment = Alignment.CenterStart, 
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                        ) {
-                            if (text.isEmpty()) {
+                    AnimatedContent(
+                        targetState = isVoiceMode,
+                        transitionSpec = {
+                            fadeIn(animationSpec = tween(150)) with
+                            fadeOut(animationSpec = tween(150))
+                        },
+                        label = "inputModeTransition"
+                    ) { voiceMode ->
+                        if (voiceMode) {
+                            // 语音模式：显示"按住说话"按钮，需要居中显示
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            ) {
                                 Text(
-                                    text = "尽管问...",
-                                    color = ColorHint,
-                                    fontSize = 15.sp
+                                    text = "按住说话",
+                                    style = TextStyle(
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ColorTextMain
+                                    )
+                                )
+                                
+                                // 覆盖透明的触摸区域来处理长按逻辑
+                                VoiceRecordButtonHandler(
+                                    onPressStart = onVoiceStart,
+                                    onPressEnd = onVoiceEnd,
+                                    onCancel = onVoiceCancel,
+                                    onOffsetChange = { offsetY, _ -> 
+                                        val isCancelling = offsetY < -150f 
+                                        onUpdateCancelState(isCancelling)
+                                    }
                                 )
                             }
-                            BasicTextField(
-                                value = text,
-                                onValueChange = onTextChange,
-                                modifier = Modifier.fillMaxWidth(),
-                                textStyle = TextStyle(color = ColorTextMain, fontSize = 15.sp),
-                                cursorBrush = SolidColor(ColorMainBlue)
-                            )
+                        } else {
+                            // 文本模式：显示输入框
+                            Box(
+                                contentAlignment = Alignment.CenterStart, 
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            ) {
+                                if (text.isEmpty()) {
+                                    Text(
+                                        text = "尽管问...",
+                                        color = ColorHint,
+                                        fontSize = 15.sp
+                                    )
+                                }
+                                BasicTextField(
+                                    value = text,
+                                    onValueChange = onTextChange,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textStyle = TextStyle(color = ColorTextMain, fontSize = 15.sp),
+                                    cursorBrush = SolidColor(ColorMainBlue)
+                                )
+                            }
                         }
                     }
                 }

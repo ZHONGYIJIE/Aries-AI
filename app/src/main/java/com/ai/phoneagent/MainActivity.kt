@@ -101,7 +101,7 @@ import android.text.Html
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import com.ai.phoneagent.ui.inputbar.InputState
-import com.ai.phoneagent.ui.inputbar.KimiInputBar
+import com.ai.phoneagent.ui.inputbar.InputBar
 import androidx.compose.runtime.*
 import androidx.compose.material3.MaterialTheme
 
@@ -1294,7 +1294,7 @@ class MainActivity : AppCompatActivity() {
                     val state by remember { inputBarState }
                     val amplitude by remember { voiceAmplitudeState }
 
-                    KimiInputBar(
+                    InputBar(
                         state = state,
                         text = text,
                         onTextChange = { inputTextState.value = it },
@@ -1336,10 +1336,26 @@ class MainActivity : AppCompatActivity() {
                         },
                         onModeChange = { isVoice ->
                             vibrateLight()
+                            // 立即停止任何正在进行的语音输入，确保状态一致
+                            val currentState = inputBarState.value
+                            if (currentState is InputState.VoiceRecording || currentState is InputState.VoiceRecognizing) {
+                                // 停止语音动画
+                                stopVoiceInputAnimation()
+                                // 清理"正在语音输入..."的动画文本，恢复之前的内容
+                                if (inputTextState.value.startsWith("正在语音输入")) {
+                                    inputTextState.value = savedInputText
+                                }
+                                // 停止语音识别
+                                stopLocalVoiceInput()
+                            }
+                            // 更新输入栏状态，确保 UI 立即反应
                             inputBarState.value = if (isVoice) InputState.VoiceIdle else InputState.Idle
+                            // 处理键盘显示/隐藏
                             if (isVoice) {
+                                // 切换到语音模式时隐藏键盘
                                 hideKeyboard()
                             }
+                            // 切换到文本模式时，系统会在 TextField 获得焦点时自动显示键盘
                         },
                         voiceAmplitude = amplitude,
                         onUpdateCancelState = { isCancelling ->
@@ -1495,7 +1511,7 @@ class MainActivity : AppCompatActivity() {
         for (m in conversation.messages) {
             // 历史消息全部使用新的复杂气泡（如果是AI），确保视觉风格统一
             if (!m.isUser) {
-                // 无论是包含 <think> 还是普通消息，都使用 appendComplexAiMessage
+                // 无论是包含 leshoot 还是普通消息，都使用 appendComplexAiMessage
                 // 使用 animate = false 立即显示
                 appendComplexAiMessage(
                     m.author,
@@ -1713,7 +1729,7 @@ class MainActivity : AppCompatActivity() {
                 val answerContent = StreamRenderHelper.getAnswerText(vh)
                 
                 val persistContent = if (thinkingContent.isNotEmpty()) {
-                    "<think>${thinkingContent}</think>\n${answerContent}"
+                    "꽁${thinkingContent}꽁\n${answerContent}"
                 } else if (answerContent.isNotEmpty()) {
                     answerContent
                 } else {
@@ -1765,7 +1781,7 @@ class MainActivity : AppCompatActivity() {
         val recentMessages = conversation.messages.takeLast(20) // 10轮对话 = 20条消息
         for (msg in recentMessages) {
             val content = if (!msg.isUser) {
-                // 历史记录传递给模型时，如果包含 <think>，是否保留？
+                // 历史记录传递给模型时，如果包含 leshoot，是否保留？
                 // 通常保留可以让模型知道之前的思考逻辑，但也可能浪费 token。
                 // 这里选择保留完整内容。
                 msg.content
@@ -1805,7 +1821,7 @@ class MainActivity : AppCompatActivity() {
         val authorName = view.findViewById<TextView>(R.id.ai_author_name)
         
         // 解析内容
-        val thinkRegex = "<think>([\\s\\S]*?)</think>([\\s\\S]*)".toRegex()
+        val thinkRegex = "leshoot([\\s\\S]*?)leshoot([\\s\\S]*)".toRegex()
         val match = thinkRegex.find(fullContent)
         
         val thinkContent = match?.groupValues?.get(1)?.trim()
@@ -1851,6 +1867,7 @@ class MainActivity : AppCompatActivity() {
             val btnCopy = view.findViewById<View>(R.id.btn_copy)
             btnCopy.setOnClickListener {
                 val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                // 复制时是否包含思考过程？Aries AI 默认只复制正文
                 val clip = android.content.ClipData.newPlainText("AI Reply", realContent)
                 cm.setPrimaryClip(clip)
                 Toast.makeText(this@MainActivity, "已复制内容", Toast.LENGTH_SHORT).show()
@@ -2102,7 +2119,7 @@ class MainActivity : AppCompatActivity() {
                 // 根据标点符号调整延迟，让显示更自然
                 val lastChar = chunk.lastOrNull() ?: ' '
                 val delayMs = when (lastChar) {
-                    '。', '！', '？', '.', '!', '?' -> 80L
+                    '。', '！', '？', '.', '!', '?', ';', '：', ':' -> 80L
                     '，', '、', '；', ',', ';', '：', ':' -> 50L
                     '\n' -> 60L
                     else -> 25L
@@ -2342,7 +2359,14 @@ class MainActivity : AppCompatActivity() {
 
                     val shouldSend = pendingSendAfterVoice
                     pendingSendAfterVoice = false
-                    inputBarState.value = InputState.VoiceIdle
+                    
+                    // 仅当当前确实处于语音相关状态时才重置为 VoiceIdle
+                    // 避免如果在识别过程中已经切换到了文本模式(Idle)，被这里强行切回 VoiceIdle
+                    val currentState = inputBarState.value
+                    if (currentState is InputState.VoiceRecording || currentState is InputState.VoiceRecognizing) {
+                        inputBarState.value = InputState.VoiceIdle
+                    }
+                    
                     stopLocalVoiceInput(triggerRecognizerStop = false)
 
                     if (shouldSend) {
@@ -2364,7 +2388,13 @@ class MainActivity : AppCompatActivity() {
                     inputTextState.value = savedInputText
                     Toast.makeText(this@MainActivity, "识别失败: ${exception.message}", Toast.LENGTH_SHORT).show()
                     pendingSendAfterVoice = false
-                    inputBarState.value = InputState.VoiceIdle
+                    
+                    // 同上，检查状态防止覆盖
+                    val currentState = inputBarState.value
+                    if (currentState is InputState.VoiceRecording || currentState is InputState.VoiceRecognizing) {
+                        inputBarState.value = InputState.VoiceIdle
+                    }
+                    
                     stopLocalVoiceInput(triggerRecognizerStop = false)
                 }
             }
@@ -2376,7 +2406,13 @@ class MainActivity : AppCompatActivity() {
                     inputTextState.value = savedInputText
                     Toast.makeText(this@MainActivity, "语音识别超时", Toast.LENGTH_SHORT).show()
                     pendingSendAfterVoice = false
-                    inputBarState.value = InputState.VoiceIdle
+                    
+                    // 同上，检查状态防止覆盖
+                    val currentState = inputBarState.value
+                    if (currentState is InputState.VoiceRecording || currentState is InputState.VoiceRecognizing) {
+                        inputBarState.value = InputState.VoiceIdle
+                    }
+                    
                     stopLocalVoiceInput(triggerRecognizerStop = false)
                 }
             }
@@ -2605,10 +2641,9 @@ class MainActivity : AppCompatActivity() {
                     override fun draw(canvas: Canvas) {
                         val w = bounds.width().toFloat()
                         val h = bounds.height().toFloat()
+                        if (w <= 0f || h <= 0f) return
                         val cx = bounds.left + w / 2f
                         val cy = bounds.top + h / 2f
-                        val r = (minOf(w, h) / 2f) - maxHalf
-                        if (r <= 0f) return
                         if (shader == null || cx != shaderCx || cy != shaderCy) {
                             shader =
                                     SweepGradient(cx, cy, intArrayOf(Color.argb(255, Color.red(blue), Color.green(blue), Color.blue(blue)), Color.argb(240, Color.red(cyan), Color.green(cyan), Color.blue(cyan)), Color.argb(220, Color.red(blue), Color.green(blue), Color.blue(blue)), Color.argb(220, Color.red(pink), Color.green(pink), Color.blue(pink)), Color.argb(150, Color.red(pink), Color.green(pink), Color.blue(pink)), Color.argb(60, Color.red(pink), Color.green(pink), Color.blue(pink)), Color.argb(0, Color.red(blue), Color.green(blue), Color.blue(blue)), Color.argb(0, Color.red(blue), Color.green(blue), Color.blue(blue))), floatArrayOf(0f, 0.08f, 0.14f, 0.22f, 0.30f, 0.40f, 0.48f, 1f))
@@ -2618,12 +2653,12 @@ class MainActivity : AppCompatActivity() {
                         shader?.let {
                             shaderMatrix.setRotate(angle, cx, cy)
                             it.setLocalMatrix(shaderMatrix)
-                            glowPaint.shader = it
-                            corePaint.shader = it
+                            // glowPaint.shader = it
+                            // corePaint.shader = it
                         }
-                        val oval = RectF(cx - r, cy - r, cx + r, cy + r)
-                        canvas.drawOval(oval, glowPaint)
-                        canvas.drawOval(oval, corePaint)
+                        // val oval = RectF(cx - r, cy - r, cx + r, cy + r)
+                        // canvas.drawOval(oval, glowPaint)
+                        // canvas.drawOval(oval, corePaint)
                     }
                     override fun setAlpha(alpha: Int) {
                         glowPaint.alpha = (alpha * 0.55f).toInt().coerceIn(0, 255)
@@ -2754,19 +2789,12 @@ class MainActivity : AppCompatActivity() {
                         shader?.let {
                             shaderMatrix.setRotate(angle, cx, cy)
                             it.setLocalMatrix(shaderMatrix)
-                            glowPaint.shader = it
-                            corePaint.shader = it
+                            // glowPaint.shader = it
+                            // corePaint.shader = it
                         }
-                        val half = maxHalf
-                        val rect =
-                                RectF(
-                                        bounds.left + half,
-                                        bounds.top + half,
-                                        bounds.right - half,
-                                        bounds.bottom - half
-                                )
-                        canvas.drawRoundRect(rect, cornerPx, cornerPx, glowPaint)
-                        canvas.drawRoundRect(rect, cornerPx, cornerPx, corePaint)
+                        // val oval = RectF(cx - r, cy - r, cx + r, cy + r)
+                        // canvas.drawOval(oval, glowPaint)
+                        // canvas.drawOval(oval, corePaint)
                     }
                     override fun setAlpha(alpha: Int) {
                         glowPaint.alpha = (alpha * 0.55f).toInt().coerceIn(0, 255)
