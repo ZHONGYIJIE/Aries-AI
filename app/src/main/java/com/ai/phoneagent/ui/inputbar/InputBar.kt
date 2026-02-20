@@ -84,7 +84,7 @@ fun InputBar(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 7.dp),
             shape = RoundedCornerShape(24.dp),
             color = ColorWhite,
             shadowElevation = 4.dp
@@ -92,7 +92,7 @@ fun InputBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 左侧图标：文本模式显示麦克风，语音模式显示键盘
@@ -178,16 +178,35 @@ fun InputBar(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // 右侧按钮
+                // 加号按钮
                 IconButton(
-                    onClick = if (text.isNotEmpty() && !isVoiceMode) onSend else onAttachmentClick,
+                    onClick = onAttachmentClick,
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
-                        painter = painterResource(id = if (text.isNotEmpty() && !isVoiceMode) R.drawable.ic_send_24 else R.drawable.ic_add_24),
-                        contentDescription = "操作",
-                        tint = if (text.isNotEmpty() && !isVoiceMode) ColorMainBlue else ColorTextSecondary,
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "附件",
+                        tint = ColorTextSecondary,
                         modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // 发送按钮 (圆形背景，黑色)
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(if (text.isNotEmpty()) Color.Black else Color.LightGray.copy(alpha = 0.4f))
+                        .clickable(enabled = text.isNotEmpty(), onClick = onSend),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_send_24),
+                        contentDescription = "发送",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }

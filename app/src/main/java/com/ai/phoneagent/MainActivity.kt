@@ -49,6 +49,7 @@ import android.view.animation.DecelerateInterpolator
 import android.view.animation.AnticipateOvershootInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.LinearLayout
+import android.widget.ImageView
 import android.widget.ImageButton
 import android.widget.TextView
 import com.ai.phoneagent.helper.StreamRenderHelper
@@ -1322,7 +1323,7 @@ class MainActivity : AppCompatActivity() {
                         },
                         onVoiceCancel = {
                             vibrateLight()
-                            inputBarState.value = InputState.VoiceIdle
+                            inputBarState.value = InputState.Idle
                             stopLocalVoiceInput()
                         },
                         onAttachmentClick = {
@@ -1535,7 +1536,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendMessage(text: String, resendUser: Boolean = true) {
+    private fun sendMessage(text: String, resendUser: Boolean = true, retryMode: Boolean = false) {
 
         if (isRequestInFlight) {
             Toast.makeText(this, "正在生成回复，请稍后…", Toast.LENGTH_SHORT).show()
@@ -1587,7 +1588,11 @@ class MainActivity : AppCompatActivity() {
         // 按钮事件绑定
         val retryPrompt = text
         vh.retryButton?.setOnClickListener {
-            sendMessage(retryPrompt, resendUser = false)
+            setRetryButtonLoadingState(vh.retryButton, isLoading = true)
+            val started = retryMessage(retryPrompt)
+            if (!started) {
+                setRetryButtonLoadingState(vh.retryButton, isLoading = false)
+            }
         }
         
         vh.copyButton?.setOnClickListener {
@@ -1613,7 +1618,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 // 构建对话历史
-                val chatHistory = buildChatHistory(c).toMutableList()
+                val chatHistory = buildChatHistory(c, retryMode).toMutableList()
                 if (!resendUser) {
                     val targetIndex = chatHistory.indexOfLast { it.role == "user" && it.content == text }
                     if (targetIndex >= 0) {
@@ -1648,6 +1653,7 @@ class MainActivity : AppCompatActivity() {
                     val result = AutoGlmClient.sendChatStreamResult(
                         apiKey = apiKey,
                         messages = chatHistory,
+                        temperature = if (retryMode) 0.7f else null,
                         onReasoningDelta = { delta ->
                             if (delta.isNotBlank()) {
                                 reasoningSb.append(delta)
@@ -1746,12 +1752,57 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    /**
+     * 真正的重试：回滚该用户问题之后的旧回答，再发起同一问题的新请求。
+     * 这样不会只是“再追加一条”，而是覆盖式重试。
+     */
+    private fun retryMessage(retryText: String): Boolean {
+        if (retryText.isBlank()) {
+            Toast.makeText(this, "未找到可重试的用户问题", Toast.LENGTH_SHORT).show()
+            return false
+        }
+
+        if (isRequestInFlight) {
+            Toast.makeText(this, "正在生成回复，请稍后…", Toast.LENGTH_SHORT).show()
+            return false
+        }
+
+        val conversation = activeConversation
+        if (conversation != null) {
+            val userIndex = conversation.messages.indexOfLast { it.isUser && it.content == retryText }
+            if (userIndex >= 0 && userIndex + 1 < conversation.messages.size) {
+                conversation.messages.subList(userIndex + 1, conversation.messages.size).clear()
+                conversation.updatedAt = System.currentTimeMillis()
+                persistConversations()
+                renderConversation(conversation)
+            }
+        }
+
+        sendMessage(retryText, resendUser = false, retryMode = true)
+        return true
+    }
+
+    /**
+     * 重试按钮轻量 loading 态：禁用点击、弱化透明度、切换文案。
+     */
+    private fun setRetryButtonLoadingState(retryButton: View?, isLoading: Boolean) {
+        val button = retryButton ?: return
+        button.isEnabled = !isLoading
+        button.alpha = if (isLoading) 0.65f else 1f
+
+        val retryTextView = button.findViewById<TextView?>(R.id.tv_retry_text)
+        retryTextView?.text = if (isLoading) getString(R.string.retrying) else getString(R.string.retry)
+
+        val retryIconView = button.findViewById<ImageView?>(R.id.iv_retry_icon)
+        retryIconView?.alpha = if (isLoading) 0.6f else 1f
+    }
     
     /**
      * 构建完整的对话历史，传递给AI模型
      * 包含系统提示和最近的对话上下文
      */
-    private fun buildChatHistory(conversation: Conversation): List<ChatRequestMessage> {
+    private fun buildChatHistory(conversation: Conversation, retryMode: Boolean = false): List<ChatRequestMessage> {
         val history = mutableListOf<ChatRequestMessage>()
         
         // 添加系统提示
@@ -1776,6 +1827,19 @@ class MainActivity : AppCompatActivity() {
                 3) 代码块使用三反引号 ``` 并尽量保持语法完整。
             """.trimIndent()
         ))
+
+        if (retryMode) {
+            val retryNonce = "retry-${System.currentTimeMillis()}"
+            history.add(
+                ChatRequestMessage(
+                    role = "system",
+                    content = """
+                        以下为内部重试标识，请勿在回答中提及：$retryNonce。
+                        请在保持问题语义一致的前提下，提供与之前不同表述的答案。
+                    """.trimIndent()
+                )
+            )
+        }
         
         // 添加对话历史（最多保留最近10轮对话，避免上下文过长）
         val recentMessages = conversation.messages.takeLast(20) // 10轮对话 = 20条消息
@@ -1877,7 +1941,11 @@ class MainActivity : AppCompatActivity() {
             btnRetry.setOnClickListener {
                 val retryText = retryUserText ?: activeConversation?.messages?.findLast { it.isUser }?.content
                 if (!retryText.isNullOrBlank()) {
-                    sendMessage(retryText, resendUser = false)
+                    setRetryButtonLoadingState(btnRetry, isLoading = true)
+                    val started = retryMessage(retryText)
+                    if (!started) {
+                        setRetryButtonLoadingState(btnRetry, isLoading = false)
+                    }
                 } else {
                     Toast.makeText(this@MainActivity, "未找到可重试的用户问题", Toast.LENGTH_SHORT).show()
                 }
@@ -1950,7 +2018,11 @@ class MainActivity : AppCompatActivity() {
             // 重试逻辑：获取上一条用户消息，重新发送
             val retryText = retryUserText ?: activeConversation?.messages?.findLast { it.isUser }?.content
             if (!retryText.isNullOrBlank()) {
-                sendMessage(retryText, resendUser = false)
+                setRetryButtonLoadingState(btnRetry, isLoading = true)
+                val started = retryMessage(retryText)
+                if (!started) {
+                    setRetryButtonLoadingState(btnRetry, isLoading = false)
+                }
             } else {
                 Toast.makeText(this@MainActivity, "未找到可重试的用户问题", Toast.LENGTH_SHORT).show()
             }
@@ -2360,11 +2432,11 @@ class MainActivity : AppCompatActivity() {
                     val shouldSend = pendingSendAfterVoice
                     pendingSendAfterVoice = false
                     
-                    // 仅当当前确实处于语音相关状态时才重置为 VoiceIdle
-                    // 避免如果在识别过程中已经切换到了文本模式(Idle)，被这里强行切回 VoiceIdle
+                    // 仅当当前确实处于语音相关状态时才重置为 Idle
+                    // 避免如果在识别过程中已经切换到了其他模式，被这里强行覆盖
                     val currentState = inputBarState.value
                     if (currentState is InputState.VoiceRecording || currentState is InputState.VoiceRecognizing) {
-                        inputBarState.value = InputState.VoiceIdle
+                        inputBarState.value = InputState.Idle
                     }
                     
                     stopLocalVoiceInput(triggerRecognizerStop = false)
@@ -2392,7 +2464,7 @@ class MainActivity : AppCompatActivity() {
                     // 同上，检查状态防止覆盖
                     val currentState = inputBarState.value
                     if (currentState is InputState.VoiceRecording || currentState is InputState.VoiceRecognizing) {
-                        inputBarState.value = InputState.VoiceIdle
+                        inputBarState.value = InputState.Idle
                     }
                     
                     stopLocalVoiceInput(triggerRecognizerStop = false)
@@ -2410,7 +2482,7 @@ class MainActivity : AppCompatActivity() {
                     // 同上，检查状态防止覆盖
                     val currentState = inputBarState.value
                     if (currentState is InputState.VoiceRecording || currentState is InputState.VoiceRecognizing) {
-                        inputBarState.value = InputState.VoiceIdle
+                        inputBarState.value = InputState.Idle
                     }
                     
                     stopLocalVoiceInput(triggerRecognizerStop = false)
