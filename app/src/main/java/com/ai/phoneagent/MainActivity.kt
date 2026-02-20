@@ -2381,6 +2381,62 @@ class MainActivity : AppCompatActivity() {
         voiceInputAnimJob = null
     }
 
+    private fun applyAutoPunctuationIfNeeded(text: String, onDone: (String) -> Unit) {
+        val raw = text.trim()
+        if (raw.isBlank()) {
+            onDone(text)
+            return
+        }
+
+        val hasPunctuation = Regex("[，。！？；：,.!?;:]").containsMatchIn(raw)
+        if (hasPunctuation || raw.length < 10) {
+            onDone(text)
+            return
+        }
+
+        val apiKey = prefs.getString("api_key", "") ?: ""
+        if (apiKey.isBlank()) {
+            onDone(text)
+            return
+        }
+
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                AutoGlmClient.sendChatResult(
+                    apiKey = apiKey,
+                    messages = listOf(
+                        ChatRequestMessage(
+                            role = "system",
+                            content = "你是标点助手，只需要在不改变词序的情况下添加中文标点符号。只输出最终文本，不要解释。"
+                        ),
+                        ChatRequestMessage(
+                            role = "user",
+                            content = "为以下文本添加标点：\n$raw"
+                        )
+                    ),
+                    temperature = 0.0f
+                )
+            }
+
+            val formatted = result.getOrNull()?.trim().orEmpty()
+            val cleaned = formatted
+                .removePrefix("输出：")
+                .removePrefix("答案：")
+                .removePrefix("标点：")
+                .trim()
+                .removeSurrounding("\"", "\"")
+                .removeSurrounding("“", "”")
+                .replace(Regex("^```.*?\n"), "")
+                .replace(Regex("```$"), "")
+                .trim()
+
+            val finalText = if (cleaned.isBlank()) text else cleaned
+            withContext(Dispatchers.Main) {
+                onDone(finalText)
+            }
+        }
+    }
+
     private fun startLocalVoiceInput() {
         val recognizer = sherpaSpeechRecognizer
         if (recognizer == null || !recognizer.isReady()) {
@@ -2427,7 +2483,8 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     stopVoiceInputAnimation()
                     val txt = (voicePrefix + text).trimStart()
-                    inputTextState.value = if (txt.isBlank()) savedInputText else txt
+                    val rawText = if (txt.isBlank()) savedInputText else txt
+                    inputTextState.value = rawText
 
                     val shouldSend = pendingSendAfterVoice
                     pendingSendAfterVoice = false
@@ -2441,14 +2498,19 @@ class MainActivity : AppCompatActivity() {
                     
                     stopLocalVoiceInput(triggerRecognizerStop = false)
 
-                    if (shouldSend) {
-                        val toSend = inputTextState.value.trim()
-                        if (toSend.isBlank()) {
-                            Toast.makeText(this@MainActivity, "请输入内容", Toast.LENGTH_SHORT).show()
-                            return@runOnUiThread
+                    applyAutoPunctuationIfNeeded(rawText) { punctuated ->
+                        if (inputTextState.value == rawText) {
+                            inputTextState.value = punctuated
                         }
-                        hideKeyboard()
-                        sendMessage(toSend)
+                        if (shouldSend) {
+                            val toSend = punctuated.trim()
+                            if (toSend.isBlank()) {
+                                Toast.makeText(this@MainActivity, "请输入内容", Toast.LENGTH_SHORT).show()
+                                return@applyAutoPunctuationIfNeeded
+                            }
+                            hideKeyboard()
+                            sendMessage(toSend)
+                        }
                     }
                 }
             }

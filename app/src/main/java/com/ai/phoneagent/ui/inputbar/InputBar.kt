@@ -247,7 +247,7 @@ fun VoiceInputOverlayContent(
 
         // 提示文字
         Text(
-            text = if (isCancelled) "松开取消" else "松开发送，上滑取消",
+            text = if (isCancelled) "松开取消" else "松开输入，上滑取消",
             fontSize = 14.sp,
             color = ColorTextSecondary,
             fontWeight = FontWeight.Medium,
