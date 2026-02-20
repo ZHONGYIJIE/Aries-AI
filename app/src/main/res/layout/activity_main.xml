@@ -73,6 +73,8 @@
             android:id="@+id/aiNoticeText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
             android:text="@string/ai_generated_notice"
             android:gravity="center"
             android:textSize="10sp"
