@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Aries AI - Android UI Automation Framework
  * Copyright (C) 2025-2026 ZG0704666
  *
@@ -44,7 +44,14 @@ data class AgentConfiguration(
      * false: 在前台执行，用户可以看到操作过程
      */
     val useBackgroundVirtualDisplay: Boolean = false,
-    
+
+        /**
+         * 是否启用可选的 Shizuku 交互能力。
+         * true: 在非虚拟屏模式下优先使用 Shizuku 模式（视图树读取、坐标点击与输入）；失败则直接报错，不回退到 Accessibility。
+         * false：继续使用当前 Accessibility + AccessibilityService 截图链路。
+         */
+    val useShizukuInteraction: Boolean = false,
+
     /**
      * 最大执行步数。
      *
@@ -215,6 +222,18 @@ data class AgentConfiguration(
     // ========== UI树参数 ==========
     /** UI 树最多保留节点数（用于摘要/精简）。越大信息越全但 token 越多 */
     val uiTreeMaxNodes: Int = 30,
+
+    /** Shizuku UI 树摘要节点上限（结构化精简专用） */
+    val shizukuUiTreeMaxNodes: Int = 40,
+
+    /** Shizuku UI 树摘要最大字符数（与 maxUiTreeChars 分离，便于单独调优） */
+    val shizukuUiTreeMaxChars: Int = 3200,
+
+    /** Shizuku UI 树摘要详情等级：minimal / summary / full */
+    val shizukuUiTreeDetail: String = "summary",
+
+    /** Shizuku 输入自动聚焦策略：true=仅首轮 Type 前自动聚焦一次 */
+    val shizukuAutoFocusFirstTypeOnly: Boolean = true,
     
     // ========== Tap+Type合并执行参数 ==========
     val tapTypeCombineKeyboardWaitMs: Long = 400L,

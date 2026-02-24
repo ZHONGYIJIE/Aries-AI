@@ -34,6 +34,8 @@ import retrofit2.http.Header
 import retrofit2.http.POST
 import com.ai.phoneagent.BuildConfig
 import java.io.IOException
+import java.net.URI
+import java.util.LinkedHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -114,8 +116,8 @@ object AutoGlmClient {
                 )
 
         // 如需替换其他网关，可修改此处
-        private const val BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
-        private const val DEFAULT_MODEL = "glm-4-flash"
+        const val DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
+        const val DEFAULT_MODEL = "glm-4-flash"
         const val PHONE_MODEL = "autoglm-phone"
 
         private const val DEFAULT_TEMPERATURE = 0.0f
@@ -123,27 +125,103 @@ object AutoGlmClient {
         private const val DEFAULT_FREQUENCY_PENALTY = 0.2f
         private const val DEFAULT_MAX_TOKENS = 4096
 
-        private val service: AutoGlmService by lazy {
-                Retrofit.Builder()
-                        .baseUrl(BASE_URL)
-                        .client(SharedHttpClient.instance)
-                        .addConverterFactory(GsonConverterFactory.create())
-                        .build()
-                        .create(AutoGlmService::class.java)
+        private const val SERVICE_CACHE_MAX_ENTRIES = 8
+
+        private val serviceCacheLock = Any()
+        private val fastServiceCacheLock = Any()
+
+        private val serviceCache =
+                object : LinkedHashMap<String, AutoGlmService>(16, 0.75f, true) {
+                        override fun removeEldestEntry(
+                                eldest: MutableMap.MutableEntry<String, AutoGlmService>?
+                        ): Boolean {
+                                return size > SERVICE_CACHE_MAX_ENTRIES
+                        }
+                }
+        private val fastServiceCache =
+                object : LinkedHashMap<String, AutoGlmService>(16, 0.75f, true) {
+                        override fun removeEldestEntry(
+                                eldest: MutableMap.MutableEntry<String, AutoGlmService>?
+                        ): Boolean {
+                                return size > SERVICE_CACHE_MAX_ENTRIES
+                        }
+                }
+
+        private fun normalizeBaseUrl(baseUrl: String): String {
+                val trimmed = baseUrl.trim().ifBlank { DEFAULT_BASE_URL }
+                val withScheme =
+                        if (
+                                trimmed.startsWith("http://", ignoreCase = true) ||
+                                        trimmed.startsWith("https://", ignoreCase = true)
+                        ) {
+                                trimmed
+                        } else {
+                                "https://$trimmed"
+                        }
+
+                val uri = runCatching { URI(withScheme) }.getOrNull()
+                val scheme = uri?.scheme?.lowercase()
+                val host = uri?.host
+
+                require(!scheme.isNullOrBlank() && !host.isNullOrBlank()) {
+                        "Invalid baseUrl: $baseUrl"
+                }
+                require(scheme == "https" || scheme == "http") {
+                        "Unsupported baseUrl scheme: $withScheme"
+                }
+
+                val canonical = "${uri.scheme}://${uri.authority}${uri.path.orEmpty()}"
+                return if (canonical.endsWith("/")) canonical else "$canonical/"
         }
 
-        private val fastService: AutoGlmService by lazy {
-                Retrofit.Builder()
-                        .baseUrl(BASE_URL)
-                        .client(SharedHttpClient.fastInstance)
-                        .addConverterFactory(GsonConverterFactory.create())
-                        .build()
-                        .create(AutoGlmService::class.java)
+        private fun resolveModel(model: String?): String =
+                model?.trim()?.takeIf { it.isNotBlank() } ?: DEFAULT_MODEL
+
+        private fun normalizeApiKey(apiKey: String): String {
+                val trimmed = apiKey.trim()
+                return if (trimmed.startsWith("Bearer ", ignoreCase = true)) {
+                        trimmed.substringAfter(" ", "").trim()
+                } else {
+                        trimmed
+                }
+        }
+
+        private fun getService(baseUrl: String): AutoGlmService {
+                val normalized = normalizeBaseUrl(baseUrl)
+                synchronized(serviceCacheLock) {
+                        serviceCache[normalized]?.let { return it }
+                        val created =
+                                Retrofit.Builder()
+                                        .baseUrl(normalized)
+                                        .client(SharedHttpClient.instance)
+                                        .addConverterFactory(GsonConverterFactory.create())
+                                        .build()
+                                        .create(AutoGlmService::class.java)
+                        serviceCache[normalized] = created
+                        return created
+                }
+        }
+
+        private fun getFastService(baseUrl: String): AutoGlmService {
+                val normalized = normalizeBaseUrl(baseUrl)
+                synchronized(fastServiceCacheLock) {
+                        fastServiceCache[normalized]?.let { return it }
+                        val created =
+                                Retrofit.Builder()
+                                        .baseUrl(normalized)
+                                        .client(SharedHttpClient.fastInstance)
+                                        .addConverterFactory(GsonConverterFactory.create())
+                                        .build()
+                                        .create(AutoGlmService::class.java)
+                        fastServiceCache[normalized] = created
+                        return created
+                }
         }
 
         suspend fun sendChatStreamResult(
                 apiKey: String,
                 messages: List<ChatRequestMessage>,
+                baseUrl: String = DEFAULT_BASE_URL,
                 model: String = DEFAULT_MODEL,
                 temperature: Float? = DEFAULT_TEMPERATURE,
                 maxTokens: Int? = DEFAULT_MAX_TOKENS,
@@ -161,9 +239,10 @@ object AutoGlmClient {
         ): Result<Unit> {
                 return withContext(Dispatchers.IO) {
                         try {
+                                val normalizedApiKey = normalizeApiKey(apiKey)
                                 val reqObj =
                                         ChatRequest(
-                                                model = model,
+                                                model = resolveModel(model),
                                                 messages = messages,
                                                 stream = true,
                                                 temperature = temperature,
@@ -174,8 +253,8 @@ object AutoGlmClient {
                                 val bodyJson = Gson().toJson(reqObj)
                                 val request =
                                         Request.Builder()
-                                                .url(BASE_URL + "chat/completions")
-                                                .addHeader("Authorization", "Bearer $apiKey")
+                                                .url(normalizeBaseUrl(baseUrl) + "chat/completions")
+                                                .addHeader("Authorization", "Bearer $normalizedApiKey")
                                                 .addHeader("Content-Type", "application/json")
                                                 .post(
                                                         bodyJson.toRequestBody(
@@ -285,14 +364,19 @@ object AutoGlmClient {
                 }
         }
 
-        suspend fun checkApi(apiKey: String, model: String = DEFAULT_MODEL): Boolean =
+        suspend fun checkApi(
+                apiKey: String,
+                baseUrl: String = DEFAULT_BASE_URL,
+                model: String = DEFAULT_MODEL,
+        ): Boolean =
                 runCatching {
+                                val normalizedApiKey = normalizeApiKey(apiKey)
                                 val res =
-                                        service.chat(
-                                                auth = "Bearer $apiKey",
+                                        getService(baseUrl).chat(
+                                                auth = "Bearer $normalizedApiKey",
                                                 request =
                                                         ChatRequest(
-                                                                model = model,
+                                                                model = resolveModel(model),
                                                                 messages =
                                                                         listOf(
                                                                                 ChatRequestMessage(
@@ -312,6 +396,7 @@ object AutoGlmClient {
         suspend fun sendChat(
                 apiKey: String,
                 messages: List<ChatRequestMessage>,
+                baseUrl: String = DEFAULT_BASE_URL,
                 model: String = DEFAULT_MODEL,
                 temperature: Float? = DEFAULT_TEMPERATURE,
                 maxTokens: Int? = DEFAULT_MAX_TOKENS,
@@ -320,6 +405,7 @@ object AutoGlmClient {
         ): String? =
                 sendChatResult(
                                 apiKey = apiKey,
+                                baseUrl = baseUrl,
                                 messages = messages,
                                 model = model,
                                 temperature = temperature,
@@ -332,6 +418,7 @@ object AutoGlmClient {
         suspend fun sendChatResult(
                 apiKey: String,
                 messages: List<ChatRequestMessage>,
+                baseUrl: String = DEFAULT_BASE_URL,
                 model: String = DEFAULT_MODEL,
                 temperature: Float? = DEFAULT_TEMPERATURE,
                 maxTokens: Int? = DEFAULT_MAX_TOKENS,
@@ -341,13 +428,14 @@ object AutoGlmClient {
                 useFastTimeouts: Boolean = false,
         ): Result<String> {
                 return try {
-                        val svc = if (useFastTimeouts) fastService else service
+                        val normalizedApiKey = normalizeApiKey(apiKey)
+                        val svc = if (useFastTimeouts) getFastService(baseUrl) else getService(baseUrl)
                         val res =
                                 svc.chat(
-                                        auth = "Bearer $apiKey",
+                                        auth = "Bearer $normalizedApiKey",
                                         request =
                                                 ChatRequest(
-                                                        model = model,
+                                                        model = resolveModel(model),
                                                         messages = messages,
                                                         stream = false,
                                                         temperature = temperature,

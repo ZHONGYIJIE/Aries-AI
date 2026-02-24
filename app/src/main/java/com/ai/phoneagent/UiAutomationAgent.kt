@@ -17,6 +17,7 @@
  */
 package com.ai.phoneagent
 
+import android.content.Context
 import com.ai.phoneagent.core.agent.ParsedAgentAction
 import com.ai.phoneagent.core.cache.ScreenshotManager
 import com.ai.phoneagent.core.config.AgentConfiguration
@@ -28,12 +29,12 @@ import com.ai.phoneagent.net.AutoGlmClient
 import com.ai.phoneagent.net.ChatRequestMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val ENABLE_SHIZUKU_UI_TREE = false
 
 /**
  * UiAutomationAgent - 重构后的主Agent
@@ -51,15 +52,30 @@ import kotlinx.coroutines.withContext
  * 3. 处理模型调用和重试
  * 4. 管理任务状态和进度
  */
-class UiAutomationAgent(private val config: AgentConfiguration = AgentConfiguration.DEFAULT) {
+class UiAutomationAgent(
+        private val appContext: Context,
+        private val config: AgentConfiguration = AgentConfiguration.DEFAULT,
+) {
     // 组件实例化
     private val actionParser = ActionParser()
-    private val actionExecutor = ActionExecutor(config)
+    private val actionExecutor = ActionExecutor(appContext, config)
     private var screenshotManager: ScreenshotManager? = null
 
     // Tap+Type 合并执行状态
     private var lastActionWasTap = false
     private var lastTapAction: ParsedAgentAction? = null
+
+    private fun hasNonEmptyDesc(action: ParsedAgentAction): Boolean {
+        val desc = action.fields["desc"] ?: action.fields["description"]
+        return desc?.trim()?.isNotBlank() == true
+    }
+
+    private fun resolveActionSubtitle(action: ParsedAgentAction): String {
+        val actionName = action.actionName.orEmpty()
+        val displayActionName = ActionUtils.getDisplayActionName(actionName, action.fields)
+        val rawDesc = action.fields["desc"] ?: action.fields["description"] ?: action.fields["comment"]
+        return (rawDesc?.trim().orEmpty().ifBlank { displayActionName }).take(config.subtitleMaxLength)
+    }
 
     interface Control {
         fun isPaused(): Boolean
@@ -82,23 +98,28 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
     /** 运行Agent执行任务 */
     suspend fun run(
             apiKey: String,
+            baseUrl: String,
             model: String,
             task: String,
-            service: PhoneAgentAccessibilityService,
+            service: PhoneAgentAccessibilityService?,
             control: Control = NoopControl,
             onLog: (String) -> Unit,
     ): AgentResult {
-        val metrics = service.resources.displayMetrics
+        val metrics = (service?.resources ?: appContext.resources).displayMetrics
         var screenW = metrics.widthPixels
         var screenH = metrics.heightPixels
 
         // 初始化截图管理器
         screenshotManager = ScreenshotManager(config)
 
+        if (config.useShizukuInteraction && !ShizukuBridge.isShizukuAvailable()) {
+            return AgentResult(false, "Shizuku 模式未授权，请先在设置中授权 Shizuku 后重试", 0)
+        }
+
         // 如果启用虚拟屏模式，先准备虚拟屏
         if (config.useBackgroundVirtualDisplay) {
             onLog("【虚拟屏模式】正在准备后台虚拟屏...")
-            val context = service as? android.content.Context ?: service.applicationContext
+            val context = service ?: appContext
             val displayId = VirtualDisplayController.prepareForTask(context, "")
             if (displayId != null && displayId > 0) {
                 onLog("【虚拟屏模式】虚拟屏已准备就绪，displayId=$displayId")
@@ -116,7 +137,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
 
         // try-finally 确保虚拟屏资源在任何退出路径下都被清理
         try {
-            return runAgentLoop(apiKey, model, task, service, control, onLog, screenW, screenH)
+            return runAgentLoop(apiKey, baseUrl, model, task, service, control, onLog, screenW, screenH)
         } finally {
             // 清理虚拟屏及预览悬浮窗
             cleanupVirtualDisplay(service)
@@ -126,9 +147,10 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
     /** Agent 主循环（从 run 抽出以支持 try-finally 清理） */
     private suspend fun runAgentLoop(
             apiKey: String,
+            baseUrl: String,
             model: String,
             task: String,
-            service: PhoneAgentAccessibilityService,
+            service: PhoneAgentAccessibilityService?,
             control: Control,
             onLog: (String) -> Unit,
             screenW: Int,
@@ -144,7 +166,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
         if (config.useBackgroundVirtualDisplay && VirtualDisplayController.isVirtualDisplayStarted()
         ) {
             onLog("【虚拟屏模式】启动预览悬浮窗...")
-            val ctx = service as? android.content.Context ?: service.applicationContext
+            val ctx = service ?: appContext
             VirtualScreenPreviewOverlay.show(ctx)
         }
 
@@ -176,7 +198,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
             if (config.useBackgroundVirtualDisplay &&
                             VirtualDisplayController.isVirtualDisplayStarted()
             ) {
-                val (vw, vh) = VirtualDisplayController.getContentSizeBestEffort(service)
+                val (vw, vh) = VirtualDisplayController.getContentSizeBestEffort(service ?: appContext)
                 if (vw > 0 && vh > 0) {
                     currentScreenW = vw
                     currentScreenH = vh
@@ -194,24 +216,40 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
             // 严格隔离模式：截图阶段不抢焦点，避免主屏返回键误作用到虚拟屏
 
             // 并行获取截图和UI树
-            val (screenshot, rawUiDump) =
-                    coroutineScope {
-                        val screenshotDeferred = async {
-                            screenshotManager?.getOptimizedScreenshot(service)
-                        }
-                        val uiDumpDeferred = async {
-                            if (config.useBackgroundVirtualDisplay &&
-                                            VirtualDisplayController.isVirtualDisplayStarted()
-                            ) {
-                                // 虚拟屏模式：纯视觉驱动，UI树置空
-                                // AccessibilityService 的 rootInActiveWindow 返回的是前台窗口的 UI 树，对虚拟屏无效
-                                "[虚拟屏模式-纯视觉驱动]"
-                            } else {
-                                service.dumpUiTreeWithRetry(maxNodes = config.uiTreeMaxNodes)
-                            }
-                        }
-                        Pair(screenshotDeferred.await(), uiDumpDeferred.await())
+            if (config.useShizukuInteraction && !ENABLE_SHIZUKU_UI_TREE) {
+                onLog("[Step $step] Shizuku UI树采集已禁用，将仅靠截图解析")
+            }
+            val shizukuUiDump =
+                    if (!config.useBackgroundVirtualDisplay && config.useShizukuInteraction && ENABLE_SHIZUKU_UI_TREE) {
+                        ShizukuBridge.dumpUiHierarchyXml()
+                    } else {
+                        null
                     }
+            val rawUiDump =
+                    if (config.useBackgroundVirtualDisplay &&
+                                    VirtualDisplayController.isVirtualDisplayStarted()
+                    ) {
+                        "[虚拟屏模式-纯视觉驱动]"
+                    } else if (config.useShizukuInteraction) {
+                        if (ENABLE_SHIZUKU_UI_TREE) {
+                            shizukuUiDump ?: "[Shizuku UI层级不可用]"
+                        } else {
+                            "[Shizuku UI树采集已禁用，使用截图驱动]"
+                        }
+                    } else {
+                        service?.dumpUiTreeWithRetry(maxNodes = config.uiTreeMaxNodes)
+                                ?: throw IllegalStateException("无障碍服务未连接，无法读取 UI 树")
+                    }
+            val screenshot = screenshotManager?.getOptimizedScreenshot(service)
+            if (config.useShizukuInteraction && ENABLE_SHIZUKU_UI_TREE && shizukuUiDump == null) {
+                onLog("[Step $step] Shizuku UI 层级读取失败，降级为截图驱动")
+            }
+            if (config.useShizukuInteraction && screenshot == null) {
+                onLog("[Step $step] Shizuku 模式未获取到截图，继续仅使用 UI 树分析")
+            }
+            if (config.useShizukuInteraction && screenshot == null && shizukuUiDump == null) {
+                return AgentResult(false, "Shizuku 截图与UI层级均不可用，请先解锁屏幕并保持前台后重试", step)
+            }
 
             // 更新进度
             AutomationOverlay.updateProgress(
@@ -224,7 +262,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
             // 截断UI树
             val uiDump = ActionUtils.truncateUiTree(rawUiDump, config.maxUiTreeChars)
 
-            val currentApp = service.currentAppPackage()
+            val currentApp = service?.currentAppPackage().orEmpty()
             val screenInfo = "{\"current_app\":\"${currentApp.replace("\"", "")}\"}"
 
             // 记录截图信息
@@ -251,7 +289,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
                                         "image_url" to
                                                 mapOf(
                                                         "url" to
-                                                                "data:image/jpeg;base64,${screenshot.base64Png}"
+                                                                "data:${screenshot.mimeType};base64,${screenshot.base64Png}"
                                                 )
                                 ),
                                 mapOf("type" to "text", "text" to userMsg)
@@ -282,6 +320,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
             val replyResult =
                     requestModelWithRetry(
                             apiKey = apiKey,
+                            baseUrl = baseUrl,
                             model = model,
                             messages = history,
                             step = step,
@@ -328,6 +367,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
             val action =
                     parseActionWithRepair(
                             apiKey = apiKey,
+                            baseUrl = baseUrl,
                             model = model,
                             history = history,
                             step = step,
@@ -371,13 +411,13 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
                                 ?.lowercase()
                                 .orEmpty()
 
-                val displayActionName =
-                        ActionUtils.getDisplayActionName(actionName, currentAction.fields)
+                val overlayActionText = resolveActionSubtitle(currentAction)
+                onLog("[Step $step] 当前动作：$overlayActionText")
                 AutomationOverlay.updateProgress(
                         step = step,
                         phaseInStep = 0.78f,
                         maxSteps = config.maxSteps,
-                        subtitle = "执行 $displayActionName"
+                        subtitle = overlayActionText
                 )
 
                 // Take_over 处理
@@ -489,6 +529,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
                 val fixResult =
                         requestModelWithRetry(
                                 apiKey = apiKey,
+                                baseUrl = baseUrl,
                                 model = model,
                                 messages = history,
                                 step = step,
@@ -520,6 +561,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
                 currentAction =
                         parseActionWithRepair(
                                 apiKey = apiKey,
+                                baseUrl = baseUrl,
                                 model = model,
                                 history = history,
                                 step = step,
@@ -568,9 +610,9 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
     } // end of run()
 
     /** 清理虚拟屏及预览悬浮窗资源 */
-    private fun cleanupVirtualDisplay(service: PhoneAgentAccessibilityService) {
+    private fun cleanupVirtualDisplay(service: PhoneAgentAccessibilityService?) {
         if (config.useBackgroundVirtualDisplay) {
-            val ctx = service as? android.content.Context ?: service.applicationContext
+            val ctx = service ?: appContext
             VirtualScreenPreviewOverlay.hide()
             VirtualDisplayController.cleanup(ctx)
         }
@@ -579,7 +621,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
     /** 检测用户任务中是否包含需要打开的应用，如果包含则自动启动 */
     private suspend fun trySmartAppLaunch(
             task: String,
-            service: PhoneAgentAccessibilityService,
+            service: PhoneAgentAccessibilityService?,
             onLog: (String) -> Unit,
     ): Boolean {
         val launchPatterns =
@@ -594,7 +636,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
                 )
 
         // 初始化应用包名管理器
-        com.ai.phoneagent.core.tools.AppPackageManager.initializeCache(service)
+        com.ai.phoneagent.core.tools.AppPackageManager.initializeCache(service ?: appContext)
 
         var resolvedPackage: String? = null
         var matchedAppName: String? = null
@@ -634,52 +676,72 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
             return false
         }
 
-        val currentApp = service.currentAppPackage()
-        if (currentApp == resolvedPackage) {
+        val currentApp = service?.currentAppPackage().orEmpty()
+        if (currentApp.isNotBlank() && currentApp == resolvedPackage) {
             onLog("[⚡快速启动] ${matchedAppName} 已在前台，跳过启动（无需连接模型）")
             return true
         }
 
-        val pm = service.packageManager
-        val intent = pm.getLaunchIntentForPackage(resolvedPackage)
-        if (intent == null) {
-            onLog("[⚡快速启动] 未找到 ${matchedAppName}(${resolvedPackage}) 的启动入口")
-            return false
-        }
-
-        intent.addFlags(
-                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                        android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                        android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
-        )
-
         try {
-            val beforeTime = service.lastWindowEventTime()
-
-            if (config.useBackgroundVirtualDisplay &&
-                            VirtualDisplayController.isVirtualDisplayStarted()
-            ) {
-                // 虚拟屏模式：启动到虚拟屏（不切换系统焦点）
-                val displayId = VirtualDisplayController.getDisplayId() ?: -1
-                LaunchProxyActivity.launchOnDisplay(service, intent, displayId)
-                onLog("[⚡快速启动] 虚拟屏启动 ${matchedAppName}（displayId=$displayId）")
-                delay(config.appLaunchExtraDelayMs + 500) // 虚拟屏启动需要稍长时间
-                // 启动完成后立即把系统焦点还给主屏（系统可能因 Activity 创建自动切焦）
-                VirtualDisplayController.restoreFocusToDefaultDisplayNow()
-            } else {
-                // 前台模式
-                LaunchProxyActivity.launch(service, intent)
-                onLog("[⚡快速启动] 后台启动 ${matchedAppName}（无需连接模型，节省时间）")
-                service.awaitWindowEvent(beforeTime, timeoutMs = config.appLaunchWaitTimeoutMs)
-                delay(config.appLaunchExtraDelayMs)
-
-                // 验证应用是否真的启动了
-                val newApp = service.currentAppPackage()
-                if (newApp != resolvedPackage) {
-                    onLog("[⚡快速启动] ${matchedAppName} 启动验证失败（当前：$newApp），将在后续步骤中处理")
-                } else {
-                    onLog("[⚡快速启动] ${matchedAppName} 启动成功，继续后续操作...")
+            if (service != null) {
+                val pm = service.packageManager
+                val intent = pm.getLaunchIntentForPackage(resolvedPackage)
+                if (intent == null) {
+                    onLog("[⚡快速启动] 未找到 ${matchedAppName}(${resolvedPackage}) 的启动入口")
+                    return false
                 }
+
+                intent.addFlags(
+                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                                android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                )
+
+                val beforeTime = service.lastWindowEventTime()
+                if (config.useBackgroundVirtualDisplay &&
+                                VirtualDisplayController.isVirtualDisplayStarted()
+                ) {
+                    // 虚拟屏模式：启动到虚拟屏（不切换系统焦点）
+                    val displayId = VirtualDisplayController.getDisplayId() ?: -1
+                    LaunchProxyActivity.launchOnDisplay(service, intent, displayId)
+                    onLog("[⚡快速启动] 虚拟屏启动 ${matchedAppName}（displayId=$displayId）")
+                    delay(config.appLaunchExtraDelayMs + 500) // 虚拟屏启动需要稍长时间
+                    // 启动完成后立即把系统焦点还给主屏（系统可能因 Activity 创建自动切焦）
+                    VirtualDisplayController.restoreFocusToDefaultDisplayNow()
+                } else {
+                    // 前台模式
+                    LaunchProxyActivity.launch(service, intent)
+                    onLog("[⚡快速启动] 后台启动 ${matchedAppName}（无需连接模型，节省时间）")
+                    service.awaitWindowEvent(beforeTime, timeoutMs = config.appLaunchWaitTimeoutMs)
+                    delay(config.appLaunchExtraDelayMs)
+
+                    // 验证应用是否真的启动了
+                    val newApp = service.currentAppPackage()
+                    if (newApp != resolvedPackage) {
+                        onLog("[⚡快速启动] ${matchedAppName} 启动验证失败（当前：$newApp），将在后续步骤中处理")
+                    } else {
+                        onLog("[⚡快速启动] ${matchedAppName} 启动成功，继续后续操作...")
+                    }
+                }
+            } else if (config.useShizukuInteraction) {
+                val targetDisplayId =
+                        if (config.useBackgroundVirtualDisplay &&
+                                        VirtualDisplayController.isVirtualDisplayStarted()
+                        ) {
+                            VirtualDisplayController.getDisplayId() ?: -1
+                        } else {
+                            -1
+                        }
+                val launched = launchAppViaShizuku(resolvedPackage, targetDisplayId, onLog)
+                if (!launched) return false
+                if (targetDisplayId > 0) {
+                    VirtualDisplayController.restoreFocusToDefaultDisplayNow()
+                }
+                onLog("[⚡快速启动] Shizuku 启动 ${matchedAppName} 成功")
+                delay(config.appLaunchExtraDelayMs)
+            } else {
+                onLog("[⚡快速启动] 无可用启动通道（无障碍未连接，且未启用 Shizuku）")
+                return false
             }
 
             // 清理截图缓存，确保获取最新的应用界面截图
@@ -691,9 +753,173 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
         }
     }
 
+    private fun launchAppViaShizuku(
+            packageName: String,
+            targetDisplayId: Int = -1,
+            onLog: (String) -> Unit
+    ): Boolean {
+        if (!ShizukuBridge.isShizukuAvailable()) {
+            onLog("[⚡快速启动] Shizuku 不可用，无法快速启动 $packageName")
+            return false
+        }
+        if (!packageName.matches(Regex("^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)+$"))) {
+            onLog("[⚡快速启动] 包名不合法，拒绝执行 Shizuku 启动：$packageName")
+            return false
+        }
+
+        if (targetDisplayId > 0) {
+            return launchAppViaShizukuOnDisplay(packageName, targetDisplayId, onLog)
+        }
+
+        val monkey = ShizukuBridge.execResultArgs(
+                listOf(
+                        "monkey",
+                        "-p",
+                        packageName,
+                        "-c",
+                        "android.intent.category.LAUNCHER",
+                        "1"
+                )
+        )
+        if (monkey.exitCode == 0) return true
+
+        val resolve =
+                ShizukuBridge.execResultArgs(
+                        listOf("cmd", "package", "resolve-activity", "--brief", packageName)
+                )
+        val component =
+                resolve.stdoutText().lineSequence().map { it.trim() }.firstOrNull {
+                    it.contains("/") &&
+                            !it.startsWith("priority=", ignoreCase = true) &&
+                            !it.startsWith("No activity", ignoreCase = true)
+                }
+        if (!component.isNullOrBlank()) {
+            val byComponent =
+                    ShizukuBridge.execResultArgs(
+                            listOf(
+                                    "am",
+                                    "start",
+                                    "-n",
+                                    component,
+                                    "-a",
+                                    "android.intent.action.MAIN",
+                                    "-c",
+                                    "android.intent.category.LAUNCHER"
+                            )
+                    )
+            if (byComponent.exitCode == 0) return true
+        }
+
+        val byPackage =
+                ShizukuBridge.execResultArgs(
+                        listOf(
+                                "am",
+                                "start",
+                                "-a",
+                                "android.intent.action.MAIN",
+                                "-c",
+                                "android.intent.category.LAUNCHER",
+                                "-p",
+                                packageName
+                        )
+                )
+        if (byPackage.exitCode == 0) return true
+
+        onLog(
+                "[⚡快速启动] Shizuku 启动失败：pkg=$packageName, exit=${monkey.exitCode}/${byPackage.exitCode}"
+        )
+        return false
+    }
+
     /** 合并执行 Tap+Type 操作 */
+    private fun launchAppViaShizukuOnDisplay(
+            packageName: String,
+            displayId: Int,
+            onLog: (String) -> Unit
+    ): Boolean {
+        val resolve =
+                ShizukuBridge.execResultArgs(
+                        listOf("cmd", "package", "resolve-activity", "--brief", packageName)
+                )
+        val component =
+                resolve.stdoutText().lineSequence().map { it.trim() }.firstOrNull {
+                    it.contains("/") &&
+                            !it.startsWith("priority=", ignoreCase = true) &&
+                            !it.startsWith("No activity", ignoreCase = true)
+                }
+
+        if (!component.isNullOrBlank()) {
+            val byComponent = launchViaDisplayCandidates(component, displayId, usePackage = false)
+            if (byComponent) return true
+        }
+
+        val byPackage = launchViaDisplayCandidates(packageName, displayId, usePackage = true)
+        if (byPackage) return true
+
+        onLog("[quick-launch] Shizuku launch failed on virtual display: pkg=$packageName, displayId=$displayId")
+        return false
+    }
+
+    private fun launchViaDisplayCandidates(
+            target: String,
+            displayId: Int,
+            usePackage: Boolean
+    ): Boolean {
+        val activityArgs =
+                mutableListOf(
+                        "-a",
+                        "android.intent.action.MAIN",
+                        "-c",
+                        "android.intent.category.LAUNCHER"
+                )
+        if (usePackage) {
+            activityArgs += listOf("-p", target)
+        } else {
+            activityArgs += listOf("-n", target)
+        }
+
+        val candidates =
+                listOf(
+                        listOf(
+                                "cmd",
+                                "activity",
+                                "start-activity",
+                                "--user",
+                                "0",
+                                "--display",
+                                displayId.toString(),
+                                "--windowingMode",
+                                "1"
+                        ) + activityArgs,
+                        listOf(
+                                "cmd",
+                                "activity",
+                                "start-activity",
+                                "--user",
+                                "0",
+                                "--display",
+                                displayId.toString()
+                        ) + activityArgs,
+                        listOf(
+                                "am",
+                                "start",
+                                "--user",
+                                "0",
+                                "--display",
+                                displayId.toString()
+                        ) + activityArgs,
+                        listOf("am", "start", "--display", displayId.toString()) + activityArgs
+                )
+
+        for (args in candidates) {
+            val result = ShizukuBridge.execResultArgs(args)
+            if (result.exitCode == 0) return true
+        }
+        return false
+    }
+
     private suspend fun executeTapAndTypeCombined(
-            service: PhoneAgentAccessibilityService,
+            service: PhoneAgentAccessibilityService?,
             tapAction: ParsedAgentAction,
             typeAction: ParsedAgentAction,
             uiDump: String,
@@ -734,41 +960,50 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
             return result
         }
 
-        // 前台模式
-        // 隐藏悬浮窗
+        if (service == null) {
+            onLog("[合并执行] 无无障碍连接，回退到分别执行")
+            val tapOk = actionExecutor.execute(tapAction, null, uiDump, screenW, screenH, onLog)
+            if (!tapOk) return false
+            return actionExecutor.execute(typeAction, null, uiDump, screenW, screenH, onLog)
+        }
+
+        // 前台模式：确保任意异常路径都恢复悬浮窗
         AutomationOverlay.temporaryHide()
-        delay(30)
+        try {
+            delay(30)
 
-        // 执行点击
-        val clickOk = service.clickAwait(x.toFloat(), y.toFloat())
-        if (!clickOk) {
-            AutomationOverlay.restoreVisibility()
-            return false
-        }
-
-        // 等待键盘弹出
-        delay(config.tapTypeCombineKeyboardWaitMs)
-
-        // 执行输入
-        var ok = service.setTextOnFocused(inputText)
-
-        // 如果失败，尝试查找可编辑元素
-        if (!ok) {
-            onLog("[合并执行] 直接输入失败，尝试查找输入框...")
-            val inputClicked = service.clickFirstEditableElement()
-            if (inputClicked) {
-                delay(200)
-                ok = service.setTextOnFocused(inputText)
+            // 执行点击
+            val clickOk = service.clickAwait(x.toFloat(), y.toFloat())
+            if (!clickOk) {
+                return false
             }
-        }
 
-        AutomationOverlay.restoreVisibility()
-        return ok
+            // 等待键盘弹出
+            delay(config.tapTypeCombineKeyboardWaitMs)
+
+            // 执行输入
+            var ok = service.setTextOnFocused(inputText)
+
+            // 如果失败，尝试查找可编辑元素
+            if (!ok) {
+                onLog("[合并执行] 直接输入失败，尝试查找输入框...")
+                val inputClicked = service.clickFirstEditableElement()
+                if (inputClicked) {
+                    delay(200)
+                    ok = service.setTextOnFocused(inputText)
+                }
+            }
+
+            return ok
+        } finally {
+            AutomationOverlay.restoreVisibility()
+        }
     }
 
     /** 解析动作并修复 */
     private suspend fun parseActionWithRepair(
             apiKey: String,
+            baseUrl: String,
             model: String,
             history: MutableList<ChatRequestMessage>,
             step: Int,
@@ -778,14 +1013,19 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
         var action =
                 actionParser.parse(ActionUtils.extractFirstActionSnippet(answerText) ?: answerText)
 
-        if (action.metadata == "do" || action.metadata == "finish") {
+        if (action.metadata == "finish") {
             return action
+        }
+        if (action.metadata == "do" && hasNonEmptyDesc(action)) {
+            return action
+        }
+        if (action.metadata == "do" && !hasNonEmptyDesc(action)) {
+            onLog("[Step $step] 动作缺少 desc，尝试让模型补齐说明")
         }
 
         var attempt = 0
         while (attempt < config.maxParseRepairs &&
-                action.metadata != "do" &&
-                action.metadata != "finish") {
+                !(action.metadata == "finish" || (action.metadata == "do" && hasNonEmptyDesc(action)))) {
             attempt++
             onLog("[Step $step] 输出无法解析为动作，尝试修正（$attempt/${config.maxParseRepairs}）…")
 
@@ -800,6 +1040,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
             val repairResult =
                     requestModelWithRetry(
                             apiKey = apiKey,
+                            baseUrl = baseUrl,
                             model = model,
                             messages = repairHistory,
                             step = step,
@@ -829,6 +1070,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
     /** 带重试的模型请求 */
     private suspend fun requestModelWithRetry(
             apiKey: String,
+            baseUrl: String,
             model: String,
             messages: List<ChatRequestMessage>,
             step: Int,
@@ -845,6 +1087,7 @@ class UiAutomationAgent(private val config: AgentConfiguration = AgentConfigurat
                     withContext(Dispatchers.IO) {
                         AutoGlmClient.sendChatResult(
                                 apiKey = apiKey,
+                                baseUrl = baseUrl,
                                 messages = messages,
                                 model = model,
                                 temperature = config.temperature,

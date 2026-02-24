@@ -1,5 +1,6 @@
 package com.ai.phoneagent
 
+import java.util.concurrent.atomic.AtomicInteger
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -14,6 +15,8 @@ import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.TypedValue
 import android.util.Log
@@ -31,6 +34,7 @@ object AutomationOverlay {
 
     private var wm: WindowManager? = null
     private var container: OverlayContainer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var maxSteps: Int = 1
     
@@ -41,6 +45,16 @@ object AutomationOverlay {
     // 【优化新增】流式思考显示
     private var isShowingThinking: Boolean = false
     private var thinkingText: String = ""
+    // 【修复】临时隐藏引用计数，防止并发调用导致竞态
+    private val hideCounter = AtomicInteger(0)
+
+    private inline fun runOnMain(crossinline action: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action()
+        } else {
+            mainHandler.post { action() }
+        }
+    }
 
     fun canDrawOverlays(context: Context): Boolean {
         if (PhoneAgentAccessibilityService.instance != null) return true
@@ -71,13 +85,14 @@ object AutomationOverlay {
         // 【优化】重置预估步骤数
         this.estimatedTotalSteps = 0
         this.hasEstimatedSteps = false
+        // 【修复】重置隐藏计数器
+        this.hideCounter.set(0)
 
         val appCtx = context.applicationContext
-        val svc = PhoneAgentAccessibilityService.instance
-        val windowCtx = svc ?: appCtx
-        val w = windowCtx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        // 统一使用应用级 WindowManager，避免依赖无障碍服务生命周期导致窗口被系统移除。
+        val w = appCtx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
-        val view = OverlayContainer(windowCtx)
+        val view = OverlayContainer(appCtx)
         view.setTexts(title, subtitle)
         view.setProgress(0f)
         view.setOnClickListener {
@@ -160,18 +175,29 @@ object AutomationOverlay {
     
     /**
      * 临时隐藏悬浮窗（执行点击操作时使用，防止点击到悬浮窗）
+     * 使用引用计数：多处并发调用 temporaryHide 时，只有所有调用方都
+     * restoreVisibility 后才真正恢复显示，避免竞态导致悬浮窗消失。
      */
     fun temporaryHide() {
         val v = container ?: return
-        v.post { v.visibility = View.GONE }
+        val count = hideCounter.incrementAndGet()
+        if (count == 1) {
+            // 仅第一次隐藏时才设置 GONE
+            v.post { v.visibility = View.GONE }
+        }
     }
     
     /**
-     * 恢复悬浮窗显示
+     * 恢复悬浮窗显示（与 temporaryHide 配对调用）
      */
     fun restoreVisibility() {
         val v = container ?: return
-        v.post { v.visibility = View.VISIBLE }
+        val count = hideCounter.decrementAndGet()
+        if (count <= 0) {
+            // 所有调用方都已恢复，真正设为 VISIBLE
+            hideCounter.set(0) // 防止负数
+            v.post { v.visibility = View.VISIBLE }
+        }
     }
     
     /**
@@ -190,10 +216,12 @@ object AutomationOverlay {
      * 开始流式思考显示
      */
     fun startThinking() {
-        val v = container ?: return
         isShowingThinking = true
         thinkingText = ""
-        v.setTexts("思考中", "等待界面稳定...")
+        runOnMain {
+            val v = container ?: return@runOnMain
+            v.setTexts("思考中", "模型推理中", "准备生成下一步动作")
+        }
     }
     
     /**
@@ -202,21 +230,20 @@ object AutomationOverlay {
      */
     fun updateThinking(delta: String) {
         if (!isShowingThinking) return
-        val v = container
-        if (v == null) {
-            Log.w("AutomationOverlay", "Container is null in updateThinking, attempting to restore")
-            isShowingThinking = false
-            return
-        }
-        
         thinkingText += delta
-        
-        // 实时提取并显示关键思考信息
         val displayText = extractRealtimeThinking(thinkingText)
-        try {
-            v.setTexts("思考中", displayText)
-        } catch (e: Exception) {
-            Log.w("AutomationOverlay", "Failed to update thinking display: ${e.message}")
+        runOnMain {
+            val v = container
+            if (v == null) {
+                Log.w("AutomationOverlay", "Container is null in updateThinking, attempting to restore")
+                isShowingThinking = false
+                return@runOnMain
+            }
+            try {
+                v.setTexts("思考中", "模型推理中", displayText)
+            } catch (e: Exception) {
+                Log.w("AutomationOverlay", "Failed to update thinking display: ${e.message}")
+            }
         }
     }
     
@@ -330,49 +357,58 @@ object AutomationOverlay {
     }
 
     fun updateProgress(step: Int, phaseInStep: Float, maxSteps: Int? = null, subtitle: String? = null) {
-        val v = container ?: return
-        // 【优化】不再用 maxSteps 参数覆盖预估值
-        // maxSteps 参数现在仅作为配置上限参考，不参与进度计算
-        if (maxSteps != null && !hasEstimatedSteps) {
-            this.maxSteps = maxSteps.coerceAtLeast(1)
-        }
-
-        val frac = calculateProgressFraction(step = step, phaseInStep = phaseInStep)
-        v.setProgress(frac)
-
-        val sub = subtitle?.trim().orEmpty()
-        val title = "执行中"
-        if (sub.isNotBlank()) {
-            v.setTexts(title, sub.take(34))
-        } else {
-            v.setTexts(title, v.subtitleText().take(34))
+        runOnMain {
+            val v = container ?: return@runOnMain
+            if (maxSteps != null && !hasEstimatedSteps) {
+                this.maxSteps = maxSteps.coerceAtLeast(1)
+            }
+            val frac = calculateProgressFraction(step = step, phaseInStep = phaseInStep)
+            v.setProgress(frac)
+            val sub = subtitle?.trim().orEmpty()
+            val title = "执行中"
+            if (sub.isNotBlank()) {
+                v.setTexts(title, sub.take(34), v.detailText())
+            } else {
+                v.setTexts(title, v.subtitleText().take(34), v.detailText())
+            }
         }
     }
 
     fun updateFromLogLine(line: String) {
-        val v = container ?: return
-
         val trimmed = simplifyLine(line).trim()
-        if (trimmed.isNotBlank()) v.setTexts(v.titleText(), trimmed.take(34))
+        if (trimmed.isBlank()) return
+        runOnMain {
+            val v = container ?: return@runOnMain
+            v.setDetailText(trimmed.take(34))
+        }
     }
 
     fun complete(message: String) {
-        val v = container ?: return
-        v.setProgress(1f)
-        v.setTexts("已完成", message.take(34))
-        v.playCompleteEffect {
-            hide()
+        runOnMain {
+            val v = container ?: return@runOnMain
+            v.setProgress(1f)
+            v.setTexts("已完成", message.take(34), "任务完成")
+            v.playCompleteEffect {
+                runOnMain {
+                    // 仅在回调对应的仍是当前悬浮窗实例时才隐藏，避免上一次任务回调误关当前任务悬浮窗
+                    if (container === v) {
+                        hide()
+                    }
+                }
+            }
         }
     }
 
     fun hide() {
         val w = wm
         val v = container
-        if (w != null && v != null) {
-            runCatching { w.removeView(v) }
-        }
         container = null
         wm = null
+        if (w != null && v != null) {
+            runOnMain {
+                runCatching { w.removeView(v) }
+            }
+        }
     }
 
     private fun parseStep(line: String): Int? {
@@ -406,6 +442,7 @@ object AutomationOverlay {
         private val ring = EdgeFlowView(context)
         private val title = TextView(context)
         private val subtitle = TextView(context)
+        private val detail = TextView(context)
 
         private var lp: WindowManager.LayoutParams? = null
         private var wm: WindowManager? = null
@@ -452,6 +489,12 @@ object AutomationOverlay {
             subtitle.maxLines = 2
             subtitle.ellipsize = android.text.TextUtils.TruncateAt.END
 
+            detail.setTextColor(Color.parseColor("#A1AEC2"))
+            detail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
+            detail.gravity = Gravity.CENTER_HORIZONTAL
+            detail.maxLines = 2
+            detail.ellipsize = android.text.TextUtils.TruncateAt.END
+
             val titleLp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
             titleLp.gravity = Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
             titleLp.topMargin = dp(-10)
@@ -460,8 +503,13 @@ object AutomationOverlay {
             subLp.gravity = Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
             subLp.topMargin = dp(14)
 
+            val detailLp = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+            detailLp.gravity = Gravity.CENTER_HORIZONTAL or Gravity.CENTER_VERTICAL
+            detailLp.topMargin = dp(30)
+
             textBox.addView(title, titleLp)
             textBox.addView(subtitle, subLp)
+            textBox.addView(detail, detailLp)
 
             isClickable = true
             isFocusable = false
@@ -476,9 +524,18 @@ object AutomationOverlay {
 
         fun subtitleText(): String = subtitle.text?.toString().orEmpty()
 
-        fun setTexts(t: String, s: String) {
+        fun detailText(): String = detail.text?.toString().orEmpty()
+
+        fun setTexts(t: String, s: String, detailText: String? = null) {
             title.text = t
             subtitle.text = s
+            if (detailText != null) {
+                detail.text = detailText
+            }
+        }
+
+        fun setDetailText(s: String) {
+            detail.text = s
         }
 
         fun setProgress(p: Float) {

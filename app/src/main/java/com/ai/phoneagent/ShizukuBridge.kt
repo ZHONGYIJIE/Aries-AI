@@ -1,8 +1,8 @@
-/*
+﻿/*
  * Aries AI - Android UI Automation Framework
  * Copyright (C) 2025-2026 ZG0704666
  *
- * Licensed under AGPL-3.0. See LICENSE for details.
+ * Licensed under the AGPL-3.0. See LICENSE for details.
  */
 package com.ai.phoneagent
 
@@ -12,26 +12,15 @@ import rikka.shizuku.Shizuku
 import java.io.ByteArrayOutputStream
 
 /**
- * Shizuku 通道桥接（Kotlin 侧）。
+ * ShizukuBridge
  *
- * **用途**
- * - 在用户授予 Shizuku 权限后，通过 Shizuku 的 binder 以高权限执行 `sh -c <command>`，
- *   用于：
- *   - 虚拟屏/系统服务相关能力（例如配合 `vdiso` 包的系统服务反射调用）。
- *   - Python 侧在 `CONNECT_MODE=SHIZUKU` 时执行 `screencap/input/am` 等命令（由 Python 调用该类的静态方法）。
- *
- * **返回码约定（见 [execResult]）**
- * - `0`：命令成功
- * - `-1`：Shizuku binder 不可用
- * - `-2`：未授予 Shizuku 权限
- * - `-3`：执行过程中抛异常
- *
- * **典型用法**
- * - `ShizukuBridge.execResult("dumpsys window windows")`
+ * - Executes shell command via Shizuku binder
+ * - Provides unified process result wrapper
  */
 object ShizukuBridge {
 
     private const val TAG = "AriesShizuku"
+    private const val DEFAULT_UI_DUMP_PATH = "/data/local/tmp/aries_ui_dump.xml"
 
     data class ExecResult(
         val exitCode: Int,
@@ -91,6 +80,12 @@ object ShizukuBridge {
     }
 
     @JvmStatic
+    fun execBytesArgs(args: List<String>): ByteArray {
+        val r = execResultArgs(args)
+        return if (r.exitCode == 0) r.stdout else ByteArray(0)
+    }
+
+    @JvmStatic
     fun execText(command: String): String {
         val bytes = execBytes(command)
         if (bytes.isEmpty()) return ""
@@ -103,11 +98,24 @@ object ShizukuBridge {
 
     @JvmStatic
     fun execResult(command: String): ExecResult {
+        return execResultInternal(arrayOf("sh", "-c", command), command)
+    }
+
+    @JvmStatic
+    fun execResultArgs(args: List<String>): ExecResult {
+        if (args.isEmpty()) return ExecResult(exitCode = -3, stdout = ByteArray(0), stderr = ByteArray(0))
+        val printable = args.joinToString(" ") { part ->
+            if (part.any { it.isWhitespace() }) "\"$part\"" else part
+        }
+        return execResultInternal(args.toTypedArray(), printable)
+    }
+
+    private fun execResultInternal(processArgs: Array<String>, commandLabel: String): ExecResult {
         return try {
             if (!pingBinder()) return ExecResult(exitCode = -1, stdout = ByteArray(0), stderr = ByteArray(0))
             if (!hasPermission()) return ExecResult(exitCode = -2, stdout = ByteArray(0), stderr = ByteArray(0))
 
-            val process = newProcess(arrayOf("sh", "-c", command))
+            val process = newProcess(processArgs)
             val cls = process.javaClass
             val inputStream = cls.getMethod("getInputStream").invoke(process) as java.io.InputStream
             val errorStream = cls.getMethod("getErrorStream").invoke(process) as java.io.InputStream
@@ -127,7 +135,7 @@ object ShizukuBridge {
                 } catch (_: Exception) {
                     ""
                 }
-                Log.w(TAG, "Shizuku exec failed: exitCode=$exitCode cmd=$command stderr=${stderrText.take(500)} stdout=${stdoutText.take(500)}")
+                Log.w(TAG, "Shizuku exec failed: exitCode=$exitCode cmd=$commandLabel stderr=${stderrText.take(500)} stdout=${stdoutText.take(500)}")
             }
 
             ExecResult(exitCode = exitCode, stdout = outBytes, stderr = errBytes)
@@ -156,7 +164,84 @@ object ShizukuBridge {
     }
 
     /**
-     * 检查 Shizuku 是否可用（binder + 权限）
+     * Dump current window hierarchy xml by uiautomator.
+     */
+    @JvmStatic
+    fun dumpUiHierarchyXml(
+            outputPath: String = DEFAULT_UI_DUMP_PATH,
+            retries: Int = 2
+    ): String? {
+        if (retries <= 0) return null
+        var lastMessage = ""
+
+        repeat(retries) { attempt ->
+            if (!isShizukuAvailable()) {
+                Log.w(TAG, "Shizuku unavailable when dumping ui hierarchy, attempt=${attempt + 1}")
+                return null
+            }
+
+            // Ensure temp file is clean before dump.
+            execResult("rm -f '$outputPath'")
+
+            var dumpResult = execResult("uiautomator dump '$outputPath'")
+            if (dumpResult.exitCode != 0) {
+                // 某些机型在默认 dump 路径上更容易触发异常，尝试 compressed 兜底。
+                dumpResult = execResult("uiautomator dump --compressed '$outputPath'")
+            }
+            if (dumpResult.exitCode != 0) {
+                lastMessage = "dump cmd exit=${dumpResult.exitCode}"
+                return@repeat
+            }
+
+            val dumpOutput = buildString {
+                append(dumpResult.stdoutText())
+                val err = dumpResult.stderrText()
+                if (err.isNotBlank()) {
+                    if (isNotEmpty()) append('\n')
+                    append(err)
+                }
+            }.trim()
+            val resolvedPath = parseDumpPath(dumpOutput).ifBlank { outputPath }
+            val raw = execResult("cat '$resolvedPath'").stdoutText()
+            val xml = raw.replace("\u0000", "").trim()
+            if (xml.contains("<hierarchy") || xml.contains("<node")) {
+                return xml
+            }
+
+            // Some ROMs print path text but fail to return valid XML on first read.
+            val fallbackRaw =
+                    if (resolvedPath != outputPath) execResult("cat '$outputPath'").stdoutText() else ""
+            val fallbackXml = fallbackRaw.replace("\u0000", "").trim()
+            if (fallbackXml.contains("<hierarchy") || fallbackXml.contains("<node")) {
+                return fallbackXml
+            }
+
+            lastMessage = "invalid ui hierarchy output, dumpOutput=${dumpOutput.take(200)}"
+        }
+
+        Log.w(TAG, "dumpUiHierarchyXml failed after $retries attempts: $lastMessage")
+        return null
+    }
+
+    private fun parseDumpPath(output: String): String {
+        val markers =
+                listOf(
+                        "UI hierarchy dumped to:",
+                        "UI hierchary dumped to:", // Android built-in output uses this typo on many builds.
+                        "UI层次结构已转储到:",
+                        "UI 层次结构已转储到:",
+                )
+        for (marker in markers) {
+            if (output.contains(marker)) {
+                return output.substringAfter(marker).lineSequence().firstOrNull()?.trim().orEmpty()
+            }
+        }
+        val pathRegex = Regex("""(/[^\s'"]+\.xml)""")
+        return pathRegex.find(output)?.groupValues?.get(1).orEmpty()
+    }
+
+    /**
+     * Check if Shizuku binder and permission are available.
      */
     @JvmStatic
     fun isShizukuAvailable(): Boolean {

@@ -58,6 +58,8 @@ import com.ai.phoneagent.databinding.ActivityAutomationBinding
 import com.ai.phoneagent.net.AutoGlmClient
 import com.ai.phoneagent.speech.SherpaSpeechRecognizer
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.switchmaterial.SwitchMaterial
+import rikka.shizuku.Shizuku
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -71,6 +73,17 @@ class AutomationActivityNew : AppCompatActivity() {
 
     companion object {
         const val EXTRA_FORCE_TOP_ON_ENTRY = "force_top_on_entry"
+        private const val SHIZUKU_PERMISSION_REQUEST_CODE = 2026
+    }
+
+    private data class RuntimeConnectionState(
+            val accessibilityEnabled: Boolean,
+            val accessibilityConnected: Boolean,
+            val shizukuBinderConnected: Boolean,
+            val shizukuPermissionGranted: Boolean,
+    ) {
+        val shizukuReady: Boolean
+            get() = shizukuBinderConnected && shizukuPermissionGranted
     }
 
     private lateinit var binding: ActivityAutomationBinding
@@ -88,6 +101,8 @@ class AutomationActivityNew : AppCompatActivity() {
     private lateinit var btnStartAgent: MaterialButton
     private lateinit var btnPauseAgent: MaterialButton
     private lateinit var btnStopAgent: MaterialButton
+
+    private lateinit var switchShizukuInteraction: SwitchMaterial
 
     // 执行模式相关
     private lateinit var rgExecutionMode: RadioGroup
@@ -114,6 +129,9 @@ class AutomationActivityNew : AppCompatActivity() {
     private val KEY_LAST_RESULT_STEPS = "last_result_steps"
     private val KEY_LAST_RESULT_TIME = "last_result_time"
     private val KEY_LAST_LOG = "last_log"
+    private val apiUseThirdPartyPref = "api_use_third_party"
+    private val apiThirdPartyBaseUrlPref = "api_third_party_base_url"
+    private val apiThirdPartyModelPref = "api_third_party_model"
 
     private val stopFromOverlayReceiver =
             object : BroadcastReceiver() {
@@ -229,7 +247,7 @@ class AutomationActivityNew : AppCompatActivity() {
                     binding.root.findViewById(R.id.tvRecommendTask)
                             ?: throw NullPointerException("tvRecommendTask not found")
 
-            // 执行模式选择
+        // 执行模式选择
             rgExecutionMode =
                     binding.root.findViewById(R.id.rgExecutionMode)
                             ?: throw NullPointerException("rgExecutionMode not found")
@@ -239,6 +257,9 @@ class AutomationActivityNew : AppCompatActivity() {
             tvVirtualDisplayStatus =
                     binding.root.findViewById(R.id.tvVirtualDisplayStatus)
                             ?: throw NullPointerException("tvVirtualDisplayStatus not found")
+            switchShizukuInteraction =
+                    binding.root.findViewById(R.id.switchShizukuInteraction)
+                            ?: throw NullPointerException("switchShizukuInteraction not found")
         } catch (e: NullPointerException) {
             Log.e("AutomationActivityNew", "UI组件初始化失败: ${e.message}", e)
             Toast.makeText(this, "应用初始化失败: ${e.message}", Toast.LENGTH_LONG).show()
@@ -282,6 +303,23 @@ class AutomationActivityNew : AppCompatActivity() {
                 }
             }
             updateVirtualDisplayStatus()
+        }
+
+        switchShizukuInteraction.isChecked =
+                VirtualDisplayConfig.getUseShizukuInteraction(this@AutomationActivityNew)
+        switchShizukuInteraction.setOnCheckedChangeListener { _, checked ->
+            VirtualDisplayConfig.setUseShizukuInteraction(this@AutomationActivityNew, checked)
+            if (checked && !ensureShizukuPermissionGranted()) {
+                val state = collectRuntimeConnectionState()
+                val msg =
+                        if (!state.shizukuBinderConnected) {
+                            "未检测到 Shizuku 服务连接，请先启动 Shizuku"
+                        } else {
+                            "未检测到 Shizuku 授权，已发起授权请求，请先在弹窗中授予"
+                        }
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            }
+            checkAccessibilityStatus()
         }
 
         setupLogCopy()
@@ -451,38 +489,84 @@ class AutomationActivityNew : AppCompatActivity() {
     /** 检查无障碍服务状态 */
     private fun checkAccessibilityStatus() {
         try {
-            val enabled = isAccessibilityServiceEnabled()
-            val connected = PhoneAgentAccessibilityService.instance != null
-
-            tvAccStatus?.text =
+            val useShizukuInteraction = switchShizukuInteraction.isChecked
+            val state = collectRuntimeConnectionState()
+            val canStart = resolveRuntimeInteractionPreference(useShizukuInteraction, state) != null
+            val accLine =
                     when {
-                        !enabled -> "服务未开启：请前往设置"
-                        !connected -> "服务已开启：正在连接..."
-                        else -> "已就绪：无障碍连接正常"
+                        state.accessibilityConnected -> "无障碍：已连接"
+                        state.accessibilityEnabled -> "无障碍：已开启（等待连接）"
+                        else -> "无障碍：未开启"
                     }
+            val shizukuLine =
+                    when {
+                        state.shizukuReady -> "Shizuku：已连接并授权"
+                        state.shizukuBinderConnected -> "Shizuku：已连接（待授权）"
+                        else -> "Shizuku：未连接"
+                    }
+            val summary =
+                    when {
+                        canStart -> "已就绪：可开始执行"
+                        useShizukuInteraction && !state.shizukuBinderConnected ->
+                                "未就绪：Shizuku 未连接"
+                        useShizukuInteraction -> "未就绪：Shizuku 未授权"
+                        state.shizukuReady -> "未就绪：仅检测到 Shizuku，请开启 Shizuku 模式"
+                        else -> "未就绪：无障碍未连接"
+                    }
+            val modeLine = if (useShizukuInteraction) "当前交互：Shizuku 模式" else "当前交互：无障碍模式"
 
+            tvAccStatus?.text = "$summary\n$modeLine\n$accLine | $shizukuLine"
             statusIndicator?.setBackgroundResource(
                     when {
-                        !enabled -> R.drawable.bg_circle_red
-                        !connected -> R.drawable.bg_circle_yellow
-                        else -> R.drawable.bg_circle_green
+                        canStart -> R.drawable.bg_circle_green
+                        state.accessibilityConnected || state.shizukuReady ->
+                                R.drawable.bg_circle_yellow
+                        else -> R.drawable.bg_circle_red
                     }
             )
-
-            // 无障碍权限未开启时，显示提示
-            if (!enabled) {
-                etTask?.hint = "请打开无障碍服务"
-                etTask?.isEnabled = false
-            } else {
-                etTask?.hint = "在此输入或录入您的任务指令..."
-                etTask?.isEnabled = true
-            }
-
-            btnOpenAccessibility?.visibility = if (enabled) View.GONE else View.VISIBLE
-            btnStartAgent?.isEnabled = enabled
+            etTask?.hint =
+                    if (canStart) {
+                        "在此输入或录入您的任务指令..."
+                    } else {
+                        "请先满足当前模式的连接条件后再开始"
+                    }
+            etTask?.isEnabled = true
+            btnOpenAccessibility?.visibility =
+                    if (!useShizukuInteraction && !state.accessibilityConnected) View.VISIBLE
+                    else View.GONE
+            btnStartAgent?.isEnabled = canStart && agentJob == null
         } catch (e: Exception) {
             Log.e("AutomationActivityNew", "检查无障碍服务状态失败: ${e.message}", e)
         }
+    }
+
+    /**
+     * 根据用户偏好与运行时连接状态，解析本次应走的交互通道。
+     * 返回 true=Shizuku，false=Accessibility，null=两者都不可用。
+     */
+    private fun resolveRuntimeInteractionPreference(
+            preferShizuku: Boolean,
+            state: RuntimeConnectionState
+    ): Boolean? {
+        return when {
+            preferShizuku && state.shizukuReady -> true
+            preferShizuku && state.accessibilityConnected -> false
+            !preferShizuku && state.accessibilityConnected -> false
+            else -> null
+        }
+    }
+
+    private fun collectRuntimeConnectionState(): RuntimeConnectionState {
+        val accessibilityEnabled = isAccessibilityServiceEnabled()
+        val accessibilityConnected = PhoneAgentAccessibilityService.instance != null
+        val shizukuBinderConnected = ShizukuBridge.pingBinder()
+        val shizukuPermissionGranted = if (shizukuBinderConnected) ShizukuBridge.hasPermission() else false
+        return RuntimeConnectionState(
+                accessibilityEnabled = accessibilityEnabled,
+                accessibilityConnected = accessibilityConnected,
+                shizukuBinderConnected = shizukuBinderConnected,
+                shizukuPermissionGranted = shizukuPermissionGranted
+        )
     }
 
     /** 判断无障碍服务是否启用 */
@@ -507,17 +591,6 @@ class AutomationActivityNew : AppCompatActivity() {
     private fun startAgent() {
         if (agentJob != null) return
 
-        if (!isAccessibilityServiceEnabled()) {
-            Toast.makeText(this, "请先开启无障碍服务", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val svc = PhoneAgentAccessibilityService.instance
-        if (svc == null) {
-            Toast.makeText(this, "服务已开启但尚未连接，请稍等或返回重进", Toast.LENGTH_SHORT).show()
-            return
-        }
-
         val task = etTask.text?.toString().orEmpty().trim()
         if (task.isBlank()) {
             Toast.makeText(this, "请输入任务", Toast.LENGTH_SHORT).show()
@@ -530,12 +603,38 @@ class AutomationActivityNew : AppCompatActivity() {
             return
         }
 
-        val model = AutoGlmClient.PHONE_MODEL
+        val baseUrl = resolveApiBaseUrl()
+        val model = resolveAutomationModel()
+        val useShizukuInteraction = switchShizukuInteraction.isChecked
+        val state = collectRuntimeConnectionState()
+        val effectiveUseShizuku = resolveRuntimeInteractionPreference(useShizukuInteraction, state)
+
+        if (effectiveUseShizuku == null) {
+            val msg =
+                    if (!state.shizukuBinderConnected && !state.accessibilityConnected) {
+                        "未检测到可用连接，请先连接 Shizuku 或无障碍服务"
+                    } else if (!useShizukuInteraction && !state.accessibilityConnected) {
+                        "Shizuku 模式已关闭且无障碍未开启，请先开启无障碍或切换到 Shizuku 模式"
+                    } else if (useShizukuInteraction && state.shizukuBinderConnected && !state.shizukuPermissionGranted) {
+                        ensureShizukuPermissionGranted()
+                        "Shizuku 未授权，已发起授权请求，请授权后重试"
+                    } else if (state.accessibilityEnabled) {
+                        "无障碍服务正在连接，请稍候后重试"
+                    } else {
+                        "当前无可用连接，请检查 Shizuku/无障碍状态"
+                    }
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            checkAccessibilityStatus()
+            return
+        }
+        if (useShizukuInteraction && !effectiveUseShizuku) {
+            appendLog("Shizuku 未就绪，已自动回退到无障碍执行")
+        }
 
         tvLog.text = ""
         val modeText = if (isBackgroundMode) "后台虚拟屏模式" else "前端执行模式"
         appendLog("执行模式：$modeText")
-        appendLog("准备开始：model=$model")
+        appendLog("准备开始：baseUrl=$baseUrl, model=$model")
         appendLog("任务：$task")
 
         if (AutomationOverlay.canDrawOverlays(this)) {
@@ -548,8 +647,7 @@ class AutomationActivityNew : AppCompatActivity() {
                             activity = this,
                     )
             if (ok) {
-                // 延迟一点让动画播放
-                window.decorView.postDelayed({ moveTaskToBack(true) }, 100)
+                // 保持前台，避免在不同模式下出现“闪回桌面/主界面”的体感问题
             } else {
                 Toast.makeText(this, "悬浮窗显示失败，将保持前台显示日志", Toast.LENGTH_SHORT).show()
             }
@@ -564,10 +662,28 @@ class AutomationActivityNew : AppCompatActivity() {
         btnStopAgent.isEnabled = true
 
         agentJob =
-                lifecycleScope.launch {
+                lifecycleScope.launch(Dispatchers.Default) {
                     try {
+                        val svc =
+                                if (effectiveUseShizuku) {
+                                    PhoneAgentAccessibilityService.instance
+                                } else {
+                                    waitForAccessibilityServiceConnection()
+                                }
+                        if (!effectiveUseShizuku && svc == null) {
+                            appendLog("无障碍服务连接失败：未获取到服务实例")
+                            AutomationOverlay.complete("无障碍服务未连接")
+                            return@launch
+                        }
+                        if (effectiveUseShizuku && svc == null) {
+                            appendLog("Shizuku 模式：未检测到无障碍连接，将以 Shizuku-only 路径执行")
+                        }
+
                         val config =
-                                AgentConfiguration(useBackgroundVirtualDisplay = isBackgroundMode)
+                                AgentConfiguration(
+                                        useBackgroundVirtualDisplay = isBackgroundMode,
+                                        useShizukuInteraction = effectiveUseShizuku
+                                )
 
                         // 更新虚拟屏状态显示
                         runOnUiThread {
@@ -576,10 +692,11 @@ class AutomationActivityNew : AppCompatActivity() {
                             }
                         }
 
-                        val agent = UiAutomationAgent(config)
+                        val agent = UiAutomationAgent(this@AutomationActivityNew, config)
                         val result =
                                 agent.run(
                                         apiKey = apiKey,
+                                        baseUrl = baseUrl,
                                         model = model,
                                         task = task,
                                         service = svc,
@@ -656,7 +773,7 @@ class AutomationActivityNew : AppCompatActivity() {
                         AutomationOverlay.complete(result.message)
 
                         // 保存运行结果
-                        val logText = tvLog.text?.toString() ?: ""
+                        val logText = withContext(Dispatchers.Main) { tvLog.text?.toString() ?: "" }
                         saveRunResult(result.success, result.message, result.steps, logText)
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) {
@@ -666,7 +783,7 @@ class AutomationActivityNew : AppCompatActivity() {
                             appendLog("异常：${e.message}")
                             AutomationOverlay.complete(e.message.orEmpty().ifBlank { "执行异常" })
                             // 保存异常结果
-                            val logText = tvLog.text?.toString() ?: ""
+                            val logText = withContext(Dispatchers.Main) { tvLog.text?.toString() ?: "" }
                             saveRunResult(false, e.message ?: "执行异常", 0, logText)
                         }
                     } finally {
@@ -676,7 +793,6 @@ class AutomationActivityNew : AppCompatActivity() {
                         virtualDisplayStatusJob?.cancel()
                         virtualDisplayStatusJob = null
                         runOnUiThread {
-                            btnStartAgent.isEnabled = true
                             btnPauseAgent.isEnabled = false
                             paused = false
                             btnPauseAgent.text = "暂停"
@@ -684,6 +800,7 @@ class AutomationActivityNew : AppCompatActivity() {
                             if (isBackgroundMode) {
                                 updateVirtualDisplayStatus()
                             }
+                            checkAccessibilityStatus()
                         }
                     }
                 }
@@ -701,6 +818,28 @@ class AutomationActivityNew : AppCompatActivity() {
         }
     }
 
+    private suspend fun waitForAccessibilityServiceConnection(
+            timeoutMs: Long = 3500L,
+            pollMs: Long = 120L
+    ): PhoneAgentAccessibilityService? {
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            PhoneAgentAccessibilityService.instance?.let { return it }
+            delay(pollMs)
+        }
+        return PhoneAgentAccessibilityService.instance
+    }
+
+    private fun ensureShizukuPermissionGranted(): Boolean {
+        if (!ShizukuBridge.pingBinder()) return false
+        if (ShizukuBridge.hasPermission()) return true
+
+        runCatching {
+            Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST_CODE)
+        }
+        return false
+    }
+
     /** 停止Agent */
     private fun stopAgent() {
         val job = agentJob
@@ -708,7 +847,6 @@ class AutomationActivityNew : AppCompatActivity() {
             job.cancel()
         }
         agentJob = null
-        btnStartAgent.isEnabled = true
         btnPauseAgent.isEnabled = false
         paused = false
         btnPauseAgent.text = "暂停"
@@ -726,6 +864,7 @@ class AutomationActivityNew : AppCompatActivity() {
             VirtualDisplayController.cleanupAsync(this)
             updateVirtualDisplayStatus()
         }
+        checkAccessibilityStatus()
     }
 
     private fun handleStopFromOverlay() {
@@ -961,6 +1100,23 @@ class AutomationActivityNew : AppCompatActivity() {
         val key = prefs.getString("api_key", "") ?: ""
         if (key.isNotBlank()) return key
         return prefs.getString("autoglm_api_key", "") ?: ""
+    }
+
+    private fun resolveApiBaseUrl(): String {
+        val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
+        val useThirdParty = prefs.getBoolean(apiUseThirdPartyPref, false)
+        if (!useThirdParty) return AutoGlmClient.DEFAULT_BASE_URL
+        val rawUrl = prefs.getString(apiThirdPartyBaseUrlPref, "")?.trim().orEmpty()
+        return rawUrl.ifBlank { AutoGlmClient.DEFAULT_BASE_URL }
+    }
+
+    private fun resolveAutomationModel(): String {
+        val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
+        val useThirdParty = prefs.getBoolean(apiUseThirdPartyPref, false)
+        if (!useThirdParty) return AutoGlmClient.PHONE_MODEL
+
+        val rawModel = prefs.getString(apiThirdPartyModelPref, "")?.trim().orEmpty()
+        return rawModel.ifBlank { AutoGlmClient.DEFAULT_MODEL }
     }
 
     /** 添加日志 */
