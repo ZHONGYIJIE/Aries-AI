@@ -127,6 +127,23 @@
 3. 开启无障碍服务
 4. 配置 API Key 开始使用
 
+### 🎙️ 语音模型下载（针对二次开发者，普通用户无需下载）
+
+如需使用**离线语音识别**功能，请下载语音模型文件：
+
+> **📥 下载地址**: [Google Drive - 语音模型](https://drive.google.com/drive/folders/1LnebW8G1wmpMeGIEQunAYMnmT1BpXmCD?usp=sharing)
+
+**说明**：
+- 由于模型文件较大，GitHub 无法直接上传
+- 开发者需自行从 Google Drive 下载模型文件
+- 下载后将模型文件放置到应用指定目录：Aries-AI\app\src\main\assets\sherpa-models
+- 语音识别功能基于 Sherpa-ncnn 离线引擎，无需联网即可使用
+
+**模型文件说明**：
+- 包含中文语音识别模型
+- 支持离线实时语音转文字
+- 适用于语音输入任务指令
+
 ### 💻 二次开发（从源码构建）
 
 如需修改代码或贡献开发，请参考详细文档：
