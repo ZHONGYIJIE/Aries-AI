@@ -1,12 +1,19 @@
-﻿# Aries AI 🚀
+# Aries AI 🚀
 
 <div align="center">
+
+<img src="Aries-site/assets/favicon_rounded.png" width="120" height="120" alt="Aries AI Logo">
 
 **让大模型在 Android 上丝滑执行 UI 自动化任务的推理加速引擎**
 
 [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Android](https://img.shields.io/badge/Platform-Android%2011%20--%2036-brightgreen.svg)]()
 [![Kotlin](https://img.shields.io/badge/Language-Kotlin-orange.svg)]()
+[![GitHub Stars](https://img.shields.io/github/stars/ZG0704666/Aries-AI?style=social)](https://github.com/ZG0704666/Aries-AI)
+
+[![QQ群](https://img.shields.io/badge/QQ群-746439473-12B7F5?logo=tencent-qq&logoColor=white)](https://qm.qq.com/q/746439473)
+[![Email](https://img.shields.io/badge/Email-zhangyongqi@njit.edu.cn-EA4335?logo=gmail&logoColor=white)](mailto:zhangyongqi@njit.edu.cn)
+[![Issues](https://img.shields.io/badge/Issues-欢迎反馈-green?logo=github)](https://github.com/ZG0704666/Aries-AI/issues)
 
 </div>
 
