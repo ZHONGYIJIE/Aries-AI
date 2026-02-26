@@ -2104,8 +2104,8 @@
         <div
             class="relative glass-card modal-panel w-full max-w-md sm:max-w-lg md:max-w-2xl p-5 sm:p-6 md:p-8 text-left rounded-2xl shadow-2xl dark:text-white text-gray-900 max-h-[90vh] overflow-y-auto">
             <button id="download-modal-close"
-                class="absolute top-4 right-4 sm:top-5 sm:right-5 w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/15 transition-colors"
-                type="button" aria-label="关闭">✕</button>
+                class="absolute top-4 right-4 sm:top-5 sm:right-5 w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 border border-white/15 transition-colors z-50 cursor-pointer"
+                type="button" aria-label="关闭" onclick="closeDownloadModal()">✕</button>
 
             <div class="flex items-start gap-3 sm:gap-4 mb-6 pr-12">
                 <img src="./assets/favicon.png" alt="Aries AI 图标"
@@ -2123,8 +2123,7 @@
                     target="_blank" rel="noopener noreferrer">
                     <div class="flex-1">
                         <div class="text-sm sm:text-base md:text-lg font-semibold">官方直连</div>
-                        <div class="text-xs sm:text-sm mt-1 dark:text-gray-300 text-gray-600">GitHub Releases V1.2.0
-                        </div>
+                        <div class="text-xs sm:text-sm mt-1 dark:text-gray-300 text-gray-600">GitHub Releases</div>
                     </div>
                     <span
                         class="text-xs sm:text-sm font-semibold text-blue-400 whitespace-nowrap self-start sm:self-auto mt-1 sm:mt-0">官方</span>
@@ -2182,8 +2181,20 @@
                 document.body.style.overflow = ''; // Restore scrolling
             }
         }
+
+        // 关闭下载弹窗
+        function closeDownloadModal() {
+            const modal = document.getElementById('download-modal');
+            if (modal) {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                modal.setAttribute('aria-hidden', 'true');
+            }
+        }
+
         // Expose to window immediately
         window.toggleMobileMenu = toggleMobileMenu;
+        window.closeDownloadModal = closeDownloadModal;
     </script>
 
 
