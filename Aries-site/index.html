@@ -102,6 +102,95 @@
             scroll-behavior: smooth;
         }
 
+        /* ============================================
+           性能优化
+           ============================================ */
+
+        /* GPU硬件加速 */
+        .aurora-blob,
+        .star,
+        .glass-card,
+        .hero-capsule,
+        button,
+        .card-hover-lift,
+        .marquee-track {
+            transform: translateZ(0);
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
+        }
+
+        /* 减少动画复杂度 */
+        @media (prefers-reduced-motion: reduce) {
+
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        /* 优化will-change */
+        .aurora-blob {
+            will-change: transform, opacity;
+        }
+
+        .star {
+            will-change: opacity, transform;
+        }
+
+        .glass-card:hover,
+        .hero-capsule:hover,
+        button:hover {
+            will-change: transform, box-shadow;
+        }
+
+        /* 移除hover时的will-change */
+        .glass-card:not(:hover),
+        .hero-capsule:not(:hover),
+        button:not(:hover) {
+            will-change: auto;
+        }
+
+        /* 优化滚动性能 */
+        .smooth-scroll {
+            scroll-behavior: smooth;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* 图片和媒体优化 */
+        img,
+        video {
+            max-width: 100%;
+            height: auto;
+            image-rendering: -webkit-optimize-contrast;
+        }
+
+        /* 字体渲染优化 */
+        * {
+            text-rendering: optimizeLegibility;
+        }
+
+        /* 触摸设备优化 */
+        @media (hover: none) and (pointer: coarse) {
+            .aurora-blob {
+                animation: none !important;
+                opacity: 0.2 !important;
+            }
+
+            .star {
+                animation: none !important;
+                opacity: 0.3 !important;
+            }
+
+            /* 减少backdrop-filter */
+            .glass-card {
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+            }
+        }
+
         /* --- 1. 动态极光背景 & 星空 --- */
         .aurora-container {
             position: fixed;
