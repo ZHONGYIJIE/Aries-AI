@@ -8,6 +8,7 @@
     <!-- Favicons -->
     <link rel="icon" type="image/png" href="./assets/favicon.png?v=3">
     <link rel="apple-touch-icon" href="./assets/favicon.png?v=3">
+    <link rel="stylesheet" href="./styles/model-marquee.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -1916,6 +1917,16 @@
         </div>
     </section>
 
+    <!-- 模型提供商滚动展示 -->
+    <section class="model-marquee-section relative z-10">
+        <div class="model-marquee-header">
+            <h2 class="model-marquee-title">支持 20+ 主流大模型服务商</h2>
+        </div>
+        <div class="model-marquee-container" id="model-marquee-row-1">
+            <div class="model-marquee-track"></div>
+        </div>
+    </section>
+
     <!-- 核心能力 -->
     <section id="features" class="py-16 md:py-24 relative z-10">
         <div class="max-w-7xl mx-auto px-5 sm:px-8 lg:px-12">
@@ -2324,6 +2335,7 @@
     </div>
 
     <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script>
+    <script src="./scripts/model-marquee.js"></script>
     <script src="./assets/app.js"></script>
     <script>
         // Fallback / Inline script to ensure mobile menu works even if app.js fails or is cached
