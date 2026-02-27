@@ -622,16 +622,36 @@
         }
 
         .app-capsule {
-            padding: 0.95rem 1.9rem;
+            padding: 0.5rem 1.25rem 0.5rem 0.5rem;
             border-radius: 9999px;
             font-size: 1.05rem;
             font-weight: 600;
             white-space: nowrap;
             display: flex;
             align-items: center;
-            gap: 0.7rem;
-            transition: all 0.3s;
+            gap: 0.75rem;
+            transition: all 0.4s cubic-bezier(0.22, 1, 0.36, 1);
             border: 1px solid rgba(255, 255, 255, 0.1);
+            cursor: default;
+        }
+
+        .app-icon-wrapper {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        .app-icon-wrapper img {
+            width: 22px;
+            height: 22px;
+            object-fit: contain;
         }
 
         html.dark .app-capsule {
@@ -1329,8 +1349,19 @@
             }
 
             .app-capsule {
-                padding: 0.5rem 1rem;
-                font-size: 0.8rem;
+                padding: 0.35rem 1rem 0.35rem 0.35rem;
+                font-size: 0.85rem;
+                gap: 0.5rem;
+            }
+
+            .app-icon-wrapper {
+                width: 28px;
+                height: 28px;
+            }
+
+            .app-icon-wrapper img {
+                width: 16px;
+                height: 16px;
             }
 
             html.light .app-capsule {
@@ -1634,13 +1665,14 @@
 
         .reveal-on-scroll {
             opacity: 0;
-            transform: translateY(30px);
-            transition: opacity 0.6s ease-out, transform 0.6s ease-out;
+            transform: translateY(40px) scale(0.96);
+            transition: opacity 0.8s cubic-bezier(0.22, 1, 0.36, 1), transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+            will-change: transform, opacity;
         }
 
         .reveal-on-scroll.revealed {
             opacity: 1;
-            transform: translateY(0);
+            transform: translateY(0) scale(1);
         }
 
         .card-hover-lift {
