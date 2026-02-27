@@ -550,7 +550,7 @@
 
         // 尝试获取域名获取图标，如果没有默认使用 apple.com 作为兜底占位
         const domain = appDomains[name] || 'apple.com';
-        const iconUrl = `https://icons.duckduckgo.com/ip3/${domain}.ico`;
+        const iconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
 
         el.innerHTML = `
           <div class="app-icon-wrapper w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-white/90 flex items-center justify-center shadow-sm overflow-hidden flex-shrink-0">
