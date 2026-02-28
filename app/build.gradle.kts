@@ -26,16 +26,32 @@ android {
         version = release(36)
     }
 
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
     defaultConfig {
         applicationId = "com.ai.phoneagent"
         minSdk = 30
         targetSdk = 36
         versionCode = 15
-        versionName = "1.3.2"
+        versionName = "1.4.0-alpha"
 
         buildConfigField("String", "GITHUB_TOKEN", "\"\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-std=c++17")
+            }
+        }
     }
 
     buildTypes {

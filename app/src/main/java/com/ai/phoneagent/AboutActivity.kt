@@ -17,26 +17,32 @@
  */
 package com.ai.phoneagent
 
+import android.annotation.SuppressLint
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.app.Dialog
-import android.graphics.Color
-import android.graphics.drawable.ColorDrawable
+import android.text.Html
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import android.view.animation.AccelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import android.widget.ImageButton
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -46,47 +52,27 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.ai.phoneagent.databinding.ActivityAboutBinding
 import com.ai.phoneagent.updates.ApkDownloadUtil
+import com.ai.phoneagent.updates.DialogSizingUtil
 import com.ai.phoneagent.updates.ReleaseEntry
 import com.ai.phoneagent.updates.ReleaseHistoryAdapter
 import com.ai.phoneagent.updates.ReleaseRepository
+import com.ai.phoneagent.updates.ReleaseUiUtil
 import com.ai.phoneagent.updates.UpdateConfig
 import com.ai.phoneagent.updates.UpdateLinkAdapter
 import com.ai.phoneagent.updates.UpdateNotificationUtil
 import com.ai.phoneagent.updates.UpdateStore
-import com.ai.phoneagent.updates.ReleaseUiUtil
-import com.ai.phoneagent.updates.UpdateHistoryActivity
 import com.ai.phoneagent.updates.VersionComparator
-import com.ai.phoneagent.updates.DialogSizingUtil
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.switchmaterial.SwitchMaterial
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-import android.view.animation.OvershootInterpolator
-import android.text.Html
-import android.view.animation.AccelerateInterpolator
-import android.annotation.SuppressLint
-import android.view.MotionEvent
-import android.view.Window
-import android.view.WindowManager
-
 class AboutActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityAboutBinding
-
     private val releaseRepo = ReleaseRepository()
-
-    private fun currentVersionName(): String {
-        val fromBuildConfig = BuildConfig.VERSION_NAME?.trim().orEmpty()
-        if (fromBuildConfig.isNotBlank()) return fromBuildConfig
-
-        return try {
-            packageManager.getPackageInfo(packageName, 0).versionName?.trim().orEmpty()
-        } catch (_: Exception) {
-            ""
-        }
-    }
+    private var isCheckingUpdates = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,7 +82,7 @@ class AboutActivity : AppCompatActivity() {
         setupEdgeToEdge()
         setupToolbar()
         setupClickListeners()
-        binding.tvAppVersion.text = "V${currentVersionName()}"
+        binding.tvAppVersion.text = getString(R.string.about_version_format, currentVersionName())
 
         // 入场动画
         binding.root.post {
@@ -113,22 +99,28 @@ class AboutActivity : AppCompatActivity() {
         maybeShowUpdateDialogFromIntent()
     }
 
-    private fun animateEntrance() {
-        val views = listOf(
-            binding.cardAppInfo,
-            binding.cardActions,
-            binding.cardDeveloper
-        )
+    private fun currentVersionName(): String {
+        val fromBuildConfig = BuildConfig.VERSION_NAME?.trim().orEmpty()
+        if (fromBuildConfig.isNotBlank()) return fromBuildConfig
 
-        views.forEachIndexed { index, view ->
-            view.alpha = 0f
-            view.translationY = 50f
-            view.animate()
+        return try {
+            packageManager.getPackageInfo(packageName, 0).versionName?.trim().orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun animateEntrance() {
+        val cards = listOf(binding.cardAppInfo, binding.cardActions, binding.cardDeveloper)
+        cards.forEachIndexed { index, card ->
+            card.alpha = 0f
+            card.translationY = 40f
+            card.animate()
                 .alpha(1f)
                 .translationY(0f)
-                .setDuration(600)
-                .setStartDelay(100L * index)
-                .setInterpolator(android.view.animation.DecelerateInterpolator(1.5f))
+                .setDuration(520)
+                .setStartDelay(90L * index)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.4f))
                 .start()
         }
     }
@@ -136,12 +128,22 @@ class AboutActivity : AppCompatActivity() {
     @SuppressLint("ClickableViewAccessibility")
     private fun applySpringScaleEffect(view: View) {
         view.setOnTouchListener { v, event ->
-            when (event.action) {
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(150).setInterpolator(android.view.animation.AccelerateInterpolator()).start()
+                    v.animate()
+                        .scaleX(0.96f)
+                        .scaleY(0.96f)
+                        .setDuration(120)
+                        .setInterpolator(android.view.animation.AccelerateInterpolator())
+                        .start()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    v.animate().scaleX(1f).scaleY(1f).setDuration(400).setInterpolator(OvershootInterpolator(2.5f)).start()
+                    v.animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setDuration(340)
+                        .setInterpolator(OvershootInterpolator(2.0f))
+                        .start()
                 }
             }
             false
@@ -150,14 +152,14 @@ class AboutActivity : AppCompatActivity() {
 
     private fun setupEdgeToEdge() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.statusBarColor = android.graphics.Color.TRANSPARENT
-        
+        window.statusBarColor = Color.TRANSPARENT
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val controller = WindowCompat.getInsetsController(window, binding.root)
-            controller.isAppearanceLightStatusBars = true
+            controller.isAppearanceLightStatusBars = resources.getBoolean(R.bool.m3t_light_system_bars)
         }
 
-        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
             val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             binding.appBar.setPadding(0, sys.top, 0, 0)
             insets
@@ -166,41 +168,31 @@ class AboutActivity : AppCompatActivity() {
 
     private fun setupToolbar() {
         // 新布局中返回按钮ID为 btnBack
-        val btnBack = binding.root.findViewById<ImageButton>(R.id.btnBack)
-        btnBack?.let { btn ->
-            // 设置返回按钮的颜色（兼容各API级别）
-            androidx.core.widget.ImageViewCompat.setImageTintList(
-                btn,
-                android.content.res.ColorStateList.valueOf(
-                    androidx.core.content.ContextCompat.getColor(this, R.color.blue_glass_primary)
-                )
-            )
-            btn.setOnClickListener {
-                vibrateLight()
-                finish()
-            }
+        androidx.core.widget.ImageViewCompat.setImageTintList(
+            binding.btnBack,
+            android.content.res.ColorStateList.valueOf(
+                androidx.core.content.ContextCompat.getColor(this, R.color.m3t_on_surface_variant)
+            ),
+        )
+        binding.btnBack.setOnClickListener {
+            vibrateLight()
+            finish()
         }
     }
 
     private fun setupClickListeners() {
         // 应用点击缩放动效
-        applySpringScaleEffect(binding.btnCheckUpdate)
-        applySpringScaleEffect(binding.itemChangelog)
-        applySpringScaleEffect(binding.itemUserAgreement)
-        applySpringScaleEffect(binding.itemLicenses)
-        applySpringScaleEffect(binding.itemDeveloper)
-        applySpringScaleEffect(binding.itemContact)
-        
-        // 尝试绑定官网项（如果布局中存在）
-        findViewById<View>(R.id.itemWebsite)?.let {
-            applySpringScaleEffect(it)
-            it.setOnClickListener {
-                vibrateLight()
-                openUrl("https://aries-agent.com/")
-            }
-        }
+        listOf(
+            binding.btnCheckUpdate,
+            binding.itemChangelog,
+            binding.itemUserAgreement,
+            binding.itemLicenses,
+            binding.itemWebsite,
+            binding.itemDeveloper,
+            binding.itemContact,
+        ).forEach { applySpringScaleEffect(it) }
 
-        // 检查更新（占位）
+        // 检查更新
         binding.btnCheckUpdate.setOnClickListener {
             vibrateLight()
             checkForUpdates()
@@ -224,17 +216,23 @@ class AboutActivity : AppCompatActivity() {
             showLicensesDialog()
         }
 
+        // 官网入口
+        binding.itemWebsite.setOnClickListener {
+            vibrateLight()
+            openUrl(getString(R.string.about_website_url))
+        }
+
         // 联系方式 - 点击复制邮箱
         binding.itemContact.setOnClickListener {
             vibrateLight()
             copyToClipboard("zhangyongqi@njit.edu.cn")
-            Toast.makeText(this, "邮箱已复制到剪贴板", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.about_contact_copied, Toast.LENGTH_SHORT).show()
         }
 
         // 开发者
         binding.itemDeveloper.setOnClickListener {
             vibrateLight()
-            Toast.makeText(this, "感谢使用 Aries AI！", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.about_thanks, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -243,24 +241,24 @@ class AboutActivity : AppCompatActivity() {
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val dialogBinding = com.ai.phoneagent.databinding.DialogUserAgreementBinding.inflate(layoutInflater)
         dialog.setContentView(dialogBinding.root)
-        
+
         dialog.window?.let { window ->
             window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
             window.setDimAmount(0f)
-            window.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            )
         }
-
-        val cardView = dialogBinding.cardAgreement
-        val containerView = dialogBinding.dialogContainer
 
         // 应用自适应高度
         DialogSizingUtil.applyCompactSizing(
-            this,
-            cardView,
-            dialogBinding.scrollAgreement,
-            null,
-            false
+            context = this,
+            cardView = dialogBinding.cardAgreement,
+            scrollBody = dialogBinding.scrollAgreement,
+            listView = null,
+            hasList = false,
         )
 
         val content = getString(R.string.user_agreement_content)
@@ -270,33 +268,33 @@ class AboutActivity : AppCompatActivity() {
             @Suppress("DEPRECATION")
             Html.fromHtml(content)
         }
+        dialogBinding.btnAgreementAgree.text = getString(R.string.action_close)
 
-        fun exitDialog() {
+        fun closeDialog() {
             vibrateLight()
-            cardView.animate()
-                .translationY(cardView.height.toFloat() * 1.5f)
+            dialogBinding.cardAgreement.animate()
+                .translationY(dialogBinding.cardAgreement.height.toFloat() * 1.5f)
                 .alpha(0f)
-                .setDuration(450)
+                .setDuration(420)
                 .setInterpolator(AccelerateInterpolator(1.2f))
                 .withEndAction { dialog.dismiss() }
                 .start()
         }
 
-        dialogBinding.btnAgreementAgree.text = "返回"
-        dialogBinding.btnAgreementAgree.setOnClickListener { exitDialog() }
-        containerView.setOnClickListener { exitDialog() }
-        cardView.setOnClickListener { } // 阻止点击卡片关闭
+        dialogBinding.btnAgreementAgree.setOnClickListener { closeDialog() }
+        dialogBinding.dialogContainer.setOnClickListener { closeDialog() }
+        dialogBinding.cardAgreement.setOnClickListener { }
 
         dialog.show()
 
         // 入场动画
-        cardView.post {
-            cardView.translationY = cardView.height.toFloat() * 1.2f
-            cardView.alpha = 0f
-            cardView.animate()
+        dialogBinding.cardAgreement.post {
+            dialogBinding.cardAgreement.translationY = dialogBinding.cardAgreement.height.toFloat() * 1.2f
+            dialogBinding.cardAgreement.alpha = 0f
+            dialogBinding.cardAgreement.animate()
                 .translationY(0f)
                 .alpha(1f)
-                .setDuration(600)
+                .setDuration(560)
                 .setInterpolator(OvershootInterpolator(1.0f))
                 .start()
         }
@@ -313,50 +311,41 @@ class AboutActivity : AppCompatActivity() {
         dialog.setContentView(containerView)
 
         val cardView = containerView.findViewById<View>(R.id.dialogCard)
-
-        dialog.window?.let { window ->
-            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window.setLayout(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT
-            )
-            window.setDimAmount(0f)
-            window.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
-            val params = window.attributes
-            params.windowAnimations = 0
-            window.attributes = params
-        }
-
         val tvTitle = containerView.findViewById<TextView>(R.id.tvTitle)
         val tvSubtitle = containerView.findViewById<TextView>(R.id.tvSubtitle)
         val tvBody = containerView.findViewById<TextView>(R.id.tvBody)
         val rvLinks = containerView.findViewById<RecyclerView>(R.id.rvLinks)
         val scrollBody = containerView.findViewById<View>(R.id.scrollBody)
 
-        tvTitle.text = "更新日志"
+        dialog.window?.let { window ->
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
+            window.setDimAmount(0f)
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            )
+            val params = window.attributes
+            params.windowAnimations = 0
+            window.attributes = params
+        }
+
+        tvTitle.text = getString(R.string.m3t_updates_title)
         tvSubtitle.text = "${UpdateConfig.REPO_OWNER}/${UpdateConfig.REPO_NAME}"
         tvBody.text = ""
         scrollBody.visibility = View.GONE
         rvLinks.visibility = View.GONE
 
-        containerView.findViewById<View>(R.id.btnOpenRelease).visibility = View.GONE
-        containerView.findViewById<View>(R.id.btnHistory).visibility = View.GONE
+        containerView.findViewById<View>(R.id.actionRow).visibility = View.GONE
 
         val historyView = LayoutInflater.from(this).inflate(R.layout.dialog_release_history, null, false)
-        val container = (rvLinks.parent as? ViewGroup)
-        container?.addView(
-            historyView,
-            container.indexOfChild(rvLinks)
-        )
-
-        val tvTips = historyView.findViewById<TextView>(R.id.tvTips)
-        tvTips.text = "下方可以选择历史版本"
+        val parent = rvLinks.parent as? ViewGroup
+        parent?.addView(historyView, parent.indexOfChild(rvLinks))
 
         val switchPrerelease = historyView.findViewById<SwitchMaterial>(R.id.switchPrerelease)
         val progress = historyView.findViewById<ProgressBar>(R.id.progress)
         val tvError = historyView.findViewById<TextView>(R.id.tvError)
         val recycler = historyView.findViewById<RecyclerView>(R.id.recyclerReleases)
-
         recycler.layoutManager = LinearLayoutManager(this)
 
         DialogSizingUtil.applyCompactSizing(
@@ -370,13 +359,11 @@ class AboutActivity : AppCompatActivity() {
         var includePrerelease = false
         var loaded: List<ReleaseEntry> = emptyList()
 
-        val adapter =
-            ReleaseHistoryAdapter(
-                onDetails = { showReleaseDetails(it) },
-                onOpenRelease = { ReleaseUiUtil.openUrl(this, it.releaseUrl) },
-                onDownload = { handleDownload(it) },
-            )
-
+        val adapter = ReleaseHistoryAdapter(
+            onDetails = { entry -> showReleaseDetails(entry) },
+            onOpenRelease = { entry -> openReleaseUrlWithFeedback(entry.releaseUrl) },
+            onDownload = { entry -> handleDownload(entry) },
+        )
         recycler.adapter = adapter
 
         fun applyFilter() {
@@ -389,19 +376,19 @@ class AboutActivity : AppCompatActivity() {
             applyFilter()
         }
 
-        fun exitDialog() {
+        fun closeDialog() {
             vibrateLight()
             cardView.animate()
                 .translationY(cardView.height.toFloat() * 1.5f)
                 .alpha(0f)
-                .setDuration(450)
+                .setDuration(420)
                 .setInterpolator(AccelerateInterpolator(1.2f))
                 .withEndAction { dialog.dismiss() }
                 .start()
         }
 
-        containerView.findViewById<View>(R.id.btnClose).setOnClickListener { exitDialog() }
-        containerView.setOnClickListener { exitDialog() }
+        containerView.findViewById<View>(R.id.btnClose).setOnClickListener { closeDialog() }
+        containerView.setOnClickListener { closeDialog() }
         cardView.setOnClickListener { }
 
         dialog.show()
@@ -412,9 +399,7 @@ class AboutActivity : AppCompatActivity() {
             cardView.animate()
                 .translationY(0f)
                 .alpha(1f)
-                .scaleX(1.0f)
-                .scaleY(1.0f)
-                .setDuration(600)
+                .setDuration(560)
                 .setInterpolator(OvershootInterpolator(1.1f))
                 .start()
         }
@@ -423,7 +408,9 @@ class AboutActivity : AppCompatActivity() {
         progress.visibility = View.VISIBLE
 
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) { releaseRepo.fetchReleasePage(page = 1, perPage = 20) }
+            val result = withContext(Dispatchers.IO) {
+                releaseRepo.fetchReleasePage(page = 1, perPage = 20)
+            }
             progress.visibility = View.GONE
 
             result
@@ -439,19 +426,40 @@ class AboutActivity : AppCompatActivity() {
     }
 
     private fun showReleaseDetails(entry: ReleaseEntry) {
-        MaterialAlertDialogBuilder(this, R.style.BlueGlassAlertDialog)
-            .setTitle(entry.versionTag)
-            .setMessage(entry.body.ifBlank { "（无更新说明）" })
-            .setPositiveButton("打开发布") { _, _ ->
-                ReleaseUiUtil.openUrl(this, entry.releaseUrl)
-            }
-            .setNegativeButton("关闭", null)
-            .show()
+        if (isFinishing || isDestroyed) return
+        runCatching {
+            MaterialAlertDialogBuilder(this, R.style.BlueGlassAlertDialog)
+                .setTitle(entry.versionTag)
+                .setMessage(entry.body.ifBlank { getString(R.string.m3t_updates_no_changelog) })
+                .setPositiveButton(R.string.m3t_updates_open_release) { _, _ ->
+                    openReleaseUrlWithFeedback(entry.releaseUrl)
+                }
+                .setNegativeButton(R.string.m3t_updates_close, null)
+                .show()
+        }.onFailure {
+            Toast.makeText(this, R.string.update_open_detail_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun setCheckUpdateLoading(isLoading: Boolean) {
+        isCheckingUpdates = isLoading
+        binding.btnCheckUpdate.isEnabled = !isLoading
+        binding.btnCheckUpdate.alpha = if (isLoading) 0.75f else 1f
+        binding.btnCheckUpdate.text =
+            if (isLoading) getString(R.string.about_checking_updates) else getString(R.string.about_check_updates)
+    }
+
+    private fun openReleaseUrlWithFeedback(url: String): Boolean {
+        val opened = ReleaseUiUtil.openUrl(this, url)
+        if (!opened) {
+            Toast.makeText(this, R.string.about_open_url_failed, Toast.LENGTH_SHORT).show()
+        }
+        return opened
     }
 
     private fun maybeShowUpdateDialogFromIntent() {
-        val show = intent?.getBooleanExtra(UpdateNotificationUtil.EXTRA_SHOW_UPDATE_DIALOG, false) == true
-        if (!show) return
+        val shouldShow = intent?.getBooleanExtra(UpdateNotificationUtil.EXTRA_SHOW_UPDATE_DIALOG, false) == true
+        if (!shouldShow) return
         intent?.putExtra(UpdateNotificationUtil.EXTRA_SHOW_UPDATE_DIALOG, false)
 
         val cached = UpdateStore.loadLatest(this)
@@ -459,13 +467,14 @@ class AboutActivity : AppCompatActivity() {
             showUpdateLinksDialog(cached)
             return
         }
-
-        checkForUpdates(showLinksDialogIfNew = true)
+        checkForUpdates()
     }
 
     private fun showUpdateLinksDialog(entry: ReleaseEntry) {
         val options = ReleaseUiUtil.mirroredDownloadOptions(entry.apkUrl)
-        val links = if (options.isNotEmpty()) options else listOf("发布页" to entry.releaseUrl)
+        val links = if (options.isNotEmpty()) options else listOf(
+            getString(R.string.m3t_updates_view_release) to entry.releaseUrl,
+        )
 
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -473,29 +482,33 @@ class AboutActivity : AppCompatActivity() {
         dialog.setContentView(containerView)
 
         val cardView = containerView.findViewById<View>(R.id.dialogCard)
-
-        dialog.window?.let { window ->
-            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window.setLayout(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT
-            )
-            window.setDimAmount(0f)
-            window.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
-            val params = window.attributes
-            params.windowAnimations = 0
-            window.attributes = params
-        }
-
         val tvTitle = containerView.findViewById<TextView>(R.id.tvTitle)
         val tvSubtitle = containerView.findViewById<TextView>(R.id.tvSubtitle)
         val tvBody = containerView.findViewById<TextView>(R.id.tvBody)
         val rvLinks = containerView.findViewById<RecyclerView>(R.id.rvLinks)
         val scrollBody = containerView.findViewById<View>(R.id.scrollBody)
 
-        tvTitle.text = "发现新版本 ${entry.versionTag}"
-        tvSubtitle.text = "${UpdateConfig.REPO_OWNER}/${UpdateConfig.REPO_NAME}  •  ${UpdateConfig.APK_ASSET_NAME}"
-        tvBody.text = entry.body.ifBlank { "（无更新说明）" }
+        dialog.window?.let { window ->
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
+            window.setDimAmount(0f)
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            )
+            val params = window.attributes
+            params.windowAnimations = 0
+            window.attributes = params
+        }
+
+        tvTitle.text = getString(R.string.m3t_updates_found) + " ${entry.versionTag}"
+        tvSubtitle.text = getString(
+            R.string.m3t_updates_repo_subtitle,
+            UpdateConfig.REPO_OWNER,
+            UpdateConfig.REPO_NAME,
+            UpdateConfig.APK_ASSET_NAME,
+        )
+        tvBody.text = entry.body.ifBlank { getString(R.string.m3t_updates_no_changelog) }
 
         DialogSizingUtil.applyCompactSizing(
             context = this,
@@ -506,38 +519,37 @@ class AboutActivity : AppCompatActivity() {
         )
 
         rvLinks.layoutManager = LinearLayoutManager(this)
+        rvLinks.adapter = UpdateLinkAdapter(
+            items = links,
+            onOpen = { openReleaseUrlWithFeedback(it) },
+            onCopy = {
+                copyToClipboard(it)
+                Toast.makeText(this@AboutActivity, R.string.about_link_copied, Toast.LENGTH_SHORT).show()
+            },
+        )
 
-        rvLinks.adapter =
-            UpdateLinkAdapter(
-                items = links,
-                onOpen = { ReleaseUiUtil.openUrl(this@AboutActivity, it) },
-                onCopy = {
-                    copyToClipboard(it)
-                    Toast.makeText(this@AboutActivity, "链接已复制", Toast.LENGTH_SHORT).show()
-                },
-            )
-
-        fun exitDialog() {
+        fun closeDialog() {
             vibrateLight()
             cardView.animate()
                 .translationY(cardView.height.toFloat() * 1.5f)
                 .alpha(0f)
-                .setDuration(450)
+                .setDuration(420)
                 .setInterpolator(AccelerateInterpolator(1.2f))
                 .withEndAction { dialog.dismiss() }
                 .start()
         }
 
-        containerView.findViewById<View>(R.id.btnClose).setOnClickListener { exitDialog() }
-        containerView.setOnClickListener { exitDialog() }
+        containerView.findViewById<View>(R.id.btnClose).setOnClickListener { closeDialog() }
+        containerView.setOnClickListener { closeDialog() }
         cardView.setOnClickListener { }
 
         containerView.findViewById<View>(R.id.btnOpenRelease).setOnClickListener {
-            exitDialog()
-            ReleaseUiUtil.openUrl(this, entry.releaseUrl)
+            closeDialog()
+            openReleaseUrlWithFeedback(entry.releaseUrl)
         }
+
         containerView.findViewById<View>(R.id.btnHistory).setOnClickListener {
-            exitDialog()
+            closeDialog()
             showReleaseHistoryDialog()
         }
 
@@ -549,82 +561,113 @@ class AboutActivity : AppCompatActivity() {
             cardView.animate()
                 .translationY(0f)
                 .alpha(1f)
-                .scaleX(1.0f)
-                .scaleY(1.0f)
-                .setDuration(600)
+                .setDuration(560)
                 .setInterpolator(OvershootInterpolator(1.1f))
                 .start()
         }
     }
 
     private fun handleDownload(entry: ReleaseEntry) {
-        if (BuildConfig.GITHUB_TOKEN.isNotBlank()) {
-            ApkDownloadUtil.enqueueApkDownload(this, entry)
-            return
-        }
-
-        val options = ReleaseUiUtil.mirroredDownloadOptions(entry.apkUrl)
-        if (options.isEmpty()) {
-            ReleaseUiUtil.openUrl(this, entry.releaseUrl)
-            return
-        }
-
-        if (options.size == 1) {
-            ReleaseUiUtil.openUrl(this, options.first().second)
-            return
-        }
-
-        val names = options.map { it.first }.toTypedArray()
-        MaterialAlertDialogBuilder(this, R.style.BlueGlassAlertDialog)
-            .setTitle("选择下载源")
-            .setItems(names) { _, which ->
-                ReleaseUiUtil.openUrl(this, options[which].second)
+        runCatching {
+            if (BuildConfig.GITHUB_TOKEN.isNotBlank()) {
+                val submitted = ApkDownloadUtil.enqueueApkDownload(this, entry)
+                if (!submitted) {
+                    Toast.makeText(this, R.string.update_download_submit_failed, Toast.LENGTH_SHORT).show()
+                    openReleaseUrlWithFeedback(entry.releaseUrl)
+                }
+                return
             }
-            .setNegativeButton("取消", null)
-            .show()
+
+            if (entry.apkUrl.isNullOrBlank()) {
+                Toast.makeText(this, R.string.update_apk_missing_fallback_release, Toast.LENGTH_SHORT).show()
+                openReleaseUrlWithFeedback(entry.releaseUrl)
+                return
+            }
+
+            val options = ReleaseUiUtil.mirroredDownloadOptions(entry.apkUrl)
+            if (options.isEmpty()) {
+                Toast.makeText(this, R.string.update_apk_missing_fallback_release, Toast.LENGTH_SHORT).show()
+                openReleaseUrlWithFeedback(entry.releaseUrl)
+                return
+            }
+            if (options.size == 1) {
+                openReleaseUrlWithFeedback(options.first().second)
+                return
+            }
+
+            val names = options.map { it.first }.toTypedArray()
+            MaterialAlertDialogBuilder(this, R.style.BlueGlassAlertDialog)
+                .setTitle(R.string.m3t_updates_choose_source)
+                .setItems(names) { _, which ->
+                    openReleaseUrlWithFeedback(options[which].second)
+                }
+                .setNegativeButton(R.string.action_cancel, null)
+                .show()
+        }.onFailure {
+            Toast.makeText(this, R.string.update_download_submit_failed, Toast.LENGTH_SHORT).show()
+            openReleaseUrlWithFeedback(entry.releaseUrl)
+        }
     }
 
-    private fun checkForUpdates(showLinksDialogIfNew: Boolean = false) {
+    private fun checkForUpdates() {
+        if (isCheckingUpdates) return
         val currentVersion = currentVersionName()
+        setCheckUpdateLoading(true)
 
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) { releaseRepo.fetchLatestReleaseResilient(includePrerelease = false) }
-            result
-                .onSuccess { latest ->
-                    if (latest == null) {
-                        MaterialAlertDialogBuilder(this@AboutActivity, R.style.BlueGlassAlertDialog)
-                            .setTitle("检查更新")
-                            .setMessage("未获取到 Release。")
-                            .setPositiveButton("确定", null)
-                            .show()
-                        return@onSuccess
-                    }
-
-                    val newer = VersionComparator.compare(latest.version, currentVersion) > 0
-                    if (newer) {
-                        UpdateStore.saveLatest(this@AboutActivity, latest)
-                        if (showLinksDialogIfNew) {
-                            showUpdateLinksDialog(latest)
-                        } else {
-                            showUpdateLinksDialog(latest)
-                        }
-                    } else {
-                        MaterialAlertDialogBuilder(this@AboutActivity, R.style.BlueGlassAlertDialog)
-                            .setTitle("已是最新")
-                            .setMessage("当前版本：$currentVersion")
-                            .setPositiveButton("确定", null)
-                            .setNeutralButton("更新历史") { _, _ -> showReleaseHistoryDialog() }
-                            .show()
-                    }
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    releaseRepo.fetchLatestReleaseResilient(includePrerelease = false)
                 }
-                .onFailure { e ->
+                if (isFinishing || isDestroyed) return@launch
+
+                val latest = result.getOrNull()
+                val error = result.exceptionOrNull()
+                if (error != null) {
                     MaterialAlertDialogBuilder(this@AboutActivity, R.style.BlueGlassAlertDialog)
-                        .setTitle("检查更新失败")
-                        .setMessage(ReleaseUiUtil.formatError(e))
-                        .setPositiveButton("确定", null)
-                        .setNeutralButton("更新历史") { _, _ -> showReleaseHistoryDialog() }
+                        .setTitle(R.string.about_check_failed)
+                        .setMessage(ReleaseUiUtil.formatError(error))
+                        .setPositiveButton(R.string.action_ok, null)
+                        .setNeutralButton(R.string.about_changelog) { _, _ -> showReleaseHistoryDialog() }
+                        .show()
+                    return@launch
+                }
+
+                if (latest == null) {
+                    MaterialAlertDialogBuilder(this@AboutActivity, R.style.BlueGlassAlertDialog)
+                        .setTitle(R.string.about_check_updates)
+                        .setMessage(R.string.about_no_release_found)
+                        .setPositiveButton(R.string.action_ok, null)
+                        .show()
+                    return@launch
+                }
+
+                val newer = VersionComparator.compare(latest.version, currentVersion) > 0
+                if (newer) {
+                    UpdateStore.saveLatest(this@AboutActivity, latest)
+                    showUpdateLinksDialog(latest)
+                } else {
+                    MaterialAlertDialogBuilder(this@AboutActivity, R.style.BlueGlassAlertDialog)
+                        .setTitle(R.string.about_up_to_date)
+                        .setMessage(getString(R.string.about_current_version_format, currentVersion))
+                        .setPositiveButton(R.string.action_ok, null)
+                        .setNeutralButton(R.string.about_changelog) { _, _ -> showReleaseHistoryDialog() }
                         .show()
                 }
+            } catch (e: Throwable) {
+                if (!isFinishing && !isDestroyed) {
+                    MaterialAlertDialogBuilder(this@AboutActivity, R.style.BlueGlassAlertDialog)
+                        .setTitle(R.string.about_check_failed)
+                        .setMessage(ReleaseUiUtil.formatError(e))
+                        .setPositiveButton(R.string.action_ok, null)
+                        .setNeutralButton(R.string.about_changelog) { _, _ -> showReleaseHistoryDialog() }
+                        .show()
+                }
+            } finally {
+                if (!isDestroyed) {
+                    setCheckUpdateLoading(false)
+                }
+            }
         }
     }
 
@@ -648,73 +691,57 @@ class AboutActivity : AppCompatActivity() {
             License("JetBrains Annotations", "Annotations for Kotlin", "Apache-2.0"),
         )
 
-        val body = licenses.joinToString("\n\n") { lic ->
-            "${lic.name}\n${lic.description}\n许可: ${lic.license}"
+        val containerView = layoutInflater.inflate(R.layout.dialog_licenses, null, false)
+        val container = containerView.findViewById<LinearLayout>(R.id.licenseContainer)
+        val cardView = containerView.findViewById<View>(R.id.cardLicenses)
+        val scrollView = containerView.findViewById<View>(R.id.scrollLicenses)
+
+        licenses.forEach { license ->
+            val row = layoutInflater.inflate(R.layout.item_license_row, container, false)
+            row.findViewById<TextView>(R.id.tvLibName).text = license.name
+            row.findViewById<TextView>(R.id.tvLibDesc).text = license.description
+            row.findViewById<TextView>(R.id.tvLibLicense).text =
+                getString(R.string.m3t_license_format, license.license)
+            container.addView(row)
         }
 
-        showSimpleSlideDialog(
-            title = "开源许可声明",
-            subtitle = "本项目使用的第三方库",
-            body = body,
-        )
-    }
-
-    private fun showSimpleSlideDialog(title: String, subtitle: String, body: String) {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val containerView = layoutInflater.inflate(R.layout.dialog_update_links, null)
         dialog.setContentView(containerView)
-
-        val cardView = containerView.findViewById<View>(R.id.dialogCard)
-
         dialog.window?.let { window ->
             window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            window.setLayout(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT
-            )
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
             window.setDimAmount(0f)
-            window.setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            )
             val params = window.attributes
             params.windowAnimations = 0
             window.attributes = params
         }
 
-        val tvTitle = containerView.findViewById<TextView>(R.id.tvTitle)
-        val tvSubtitle = containerView.findViewById<TextView>(R.id.tvSubtitle)
-        val tvBody = containerView.findViewById<TextView>(R.id.tvBody)
-        val rvLinks = containerView.findViewById<RecyclerView>(R.id.rvLinks)
-        val scrollBody = containerView.findViewById<View>(R.id.scrollBody)
-
-        tvTitle.text = title
-        tvSubtitle.text = subtitle
-        tvBody.text = body
-
         DialogSizingUtil.applyCompactSizing(
             context = this,
             cardView = cardView,
-            scrollBody = scrollBody,
+            scrollBody = scrollView,
             listView = null,
             hasList = false,
         )
 
-        rvLinks.visibility = View.GONE
-        containerView.findViewById<View>(R.id.btnHistory).visibility = View.GONE
-        containerView.findViewById<View>(R.id.btnOpenRelease).visibility = View.GONE
-
-        fun exitDialog() {
+        fun closeDialog() {
             vibrateLight()
             cardView.animate()
                 .translationY(cardView.height.toFloat() * 1.5f)
                 .alpha(0f)
-                .setDuration(450)
+                .setDuration(420)
                 .setInterpolator(AccelerateInterpolator(1.2f))
                 .withEndAction { dialog.dismiss() }
                 .start()
         }
 
-        containerView.findViewById<View>(R.id.btnClose).setOnClickListener { exitDialog() }
-        containerView.setOnClickListener { exitDialog() }
+        containerView.findViewById<View>(R.id.btnCloseLicenses).setOnClickListener { closeDialog() }
+        containerView.findViewById<View>(R.id.dialogContainer).setOnClickListener { closeDialog() }
         cardView.setOnClickListener { }
 
         dialog.show()
@@ -725,9 +752,7 @@ class AboutActivity : AppCompatActivity() {
             cardView.animate()
                 .translationY(0f)
                 .alpha(1f)
-                .scaleX(1.0f)
-                .scaleY(1.0f)
-                .setDuration(600)
+                .setDuration(560)
                 .setInterpolator(OvershootInterpolator(1.1f))
                 .start()
         }
@@ -735,16 +760,15 @@ class AboutActivity : AppCompatActivity() {
 
     private fun copyToClipboard(text: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText("text", text)
-        clipboard.setPrimaryClip(clip)
+        clipboard.setPrimaryClip(ClipData.newPlainText("text", text))
     }
 
     private fun openUrl(url: String) {
         try {
             val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
             startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "无法打开网页", Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+            Toast.makeText(this, R.string.about_open_url_failed, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -758,18 +782,19 @@ class AboutActivity : AppCompatActivity() {
                 getSystemService(VIBRATOR_SERVICE) as? Vibrator
             } ?: return
 
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
-                } else {
-                    @Suppress("DEPRECATION")
-                    vibrator.vibrate(30)
-                }
-            } catch (_: Throwable) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(30)
             }
         } catch (_: Throwable) {
         }
     }
 
-    private data class License(val name: String, val description: String, val license: String)
+    private data class License(
+        val name: String,
+        val description: String,
+        val license: String,
+    )
 }

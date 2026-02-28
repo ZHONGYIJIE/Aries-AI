@@ -1,5 +1,6 @@
 package com.ai.phoneagent.updates
 
+import android.os.SystemClock
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -14,6 +15,10 @@ class ReleaseHistoryAdapter(
     private val onOpenRelease: (ReleaseEntry) -> Unit,
     private val onDownload: (ReleaseEntry) -> Unit,
 ) : RecyclerView.Adapter<ReleaseHistoryAdapter.VH>() {
+
+    companion object {
+        private const val CLICK_THROTTLE_MS = 600L
+    }
 
     fun submitList(newItems: List<ReleaseEntry>) {
         items.clear()
@@ -47,6 +52,14 @@ class ReleaseHistoryAdapter(
         private val btnDetails: MaterialButton = itemView.findViewById(R.id.btnDetails)
         private val btnOpen: MaterialButton = itemView.findViewById(R.id.btnOpen)
         private val btnDownload: MaterialButton = itemView.findViewById(R.id.btnDownload)
+        private var lastClickAt: Long = 0L
+
+        private fun runThrottled(action: () -> Unit) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastClickAt < CLICK_THROTTLE_MS) return
+            lastClickAt = now
+            action()
+        }
 
         fun bind(entry: ReleaseEntry) {
             tvVersion.text = entry.versionTag
@@ -55,16 +68,16 @@ class ReleaseHistoryAdapter(
 
             tvPrerelease.visibility = if (entry.isPrerelease) View.VISIBLE else View.GONE
 
-            btnDetails.setOnClickListener { onDetails(entry) }
-            btnOpen.setOnClickListener { onOpenRelease(entry) }
+            btnDetails.setOnClickListener { runThrottled { onDetails(entry) } }
+            btnOpen.setOnClickListener { runThrottled { onOpenRelease(entry) } }
 
-            if (entry.apkUrl.isNullOrBlank()) {
-                btnDownload.text = "打开"
-            } else {
-                btnDownload.text = "下载"
-            }
-
-            btnDownload.setOnClickListener { onDownload(entry) }
+            btnDownload.text =
+                if (entry.apkUrl.isNullOrBlank()) {
+                    itemView.context.getString(R.string.m3t_updates_view)
+                } else {
+                    itemView.context.getString(R.string.m3t_updates_download)
+                }
+            btnDownload.setOnClickListener { runThrottled { onDownload(entry) } }
         }
     }
 }

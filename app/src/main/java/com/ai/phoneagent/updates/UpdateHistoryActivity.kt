@@ -3,6 +3,7 @@ package com.ai.phoneagent.updates
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -10,12 +11,12 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.ai.phoneagent.R
 import com.ai.phoneagent.BuildConfig
+import com.ai.phoneagent.R
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.switchmaterial.SwitchMaterial
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,16 +42,16 @@ class UpdateHistoryActivity : AppCompatActivity() {
 
     private enum class LoadMoreMode {
         LoadMore,
-        Retry
+        Retry,
     }
 
     private var loadMoreMode: LoadMoreMode = LoadMoreMode.LoadMore
 
     private val adapter by lazy {
         ReleaseHistoryAdapter(
-            onDetails = { showDetails(it) },
-            onOpenRelease = { ReleaseUiUtil.openUrl(this, it.releaseUrl) },
-            onDownload = { handleDownload(it) },
+            onDetails = { entry -> showDetails(entry) },
+            onOpenRelease = { entry -> openReleaseUrlWithFeedback(entry.releaseUrl) },
+            onDownload = { entry -> handleDownload(entry) },
         )
     }
 
@@ -91,7 +92,12 @@ class UpdateHistoryActivity : AppCompatActivity() {
 
     private fun setupEdgeToEdge() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.statusBarColor = getColor(R.color.blue_glass_primary)
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        WindowCompat.getInsetsController(window, window.decorView)?.let { controller ->
+            val useLightSystemBarIcons = resources.getBoolean(R.bool.m3t_light_system_bars)
+            controller.isAppearanceLightStatusBars = useLightSystemBarIcons
+            controller.isAppearanceLightNavigationBars = useLightSystemBarIcons
+        }
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.appBar)) { v, insets ->
             val sys = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -104,7 +110,7 @@ class UpdateHistoryActivity : AppCompatActivity() {
         page = 1
         adapter.submitList(emptyList())
         loadMoreMode = LoadMoreMode.LoadMore
-        btnLoadMore.text = "加载更多"
+        btnLoadMore.text = getString(R.string.m3t_updates_load_more)
         btnLoadMore.isEnabled = true
         loadPage(resetError = true)
     }
@@ -144,7 +150,12 @@ class UpdateHistoryActivity : AppCompatActivity() {
 
                     loadMoreMode = LoadMoreMode.LoadMore
                     btnLoadMore.isEnabled = true
-                    btnLoadMore.text = if (filtered.isNotEmpty()) "加载更多" else "没有更多了"
+                    btnLoadMore.text =
+                        if (filtered.isNotEmpty()) {
+                            getString(R.string.m3t_updates_load_more)
+                        } else {
+                            getString(R.string.m3t_updates_no_more)
+                        }
                 }
                 .onFailure { e ->
                     tvError.visibility = View.VISIBLE
@@ -152,44 +163,75 @@ class UpdateHistoryActivity : AppCompatActivity() {
 
                     loadMoreMode = LoadMoreMode.Retry
                     btnLoadMore.isEnabled = true
-                    btnLoadMore.text = "重试"
+                    btnLoadMore.text = getString(R.string.m3t_updates_retry)
                 }
         }
     }
 
+    private fun openReleaseUrlWithFeedback(url: String): Boolean {
+        val opened = ReleaseUiUtil.openUrl(this, url)
+        if (!opened) {
+            Toast.makeText(this, R.string.about_open_url_failed, Toast.LENGTH_SHORT).show()
+        }
+        return opened
+    }
+
     private fun showDetails(entry: ReleaseEntry) {
-        MaterialAlertDialogBuilder(this, R.style.BlueGlassAlertDialog)
-            .setTitle(entry.versionTag)
-            .setMessage(entry.body.ifBlank { "（无更新说明）" })
-            .setPositiveButton("打开发布") { _, _ -> ReleaseUiUtil.openUrl(this, entry.releaseUrl) }
-            .setNegativeButton("关闭", null)
-            .show()
+        if (isFinishing || isDestroyed) return
+        runCatching {
+            MaterialAlertDialogBuilder(this, R.style.BlueGlassAlertDialog)
+                .setTitle(entry.versionTag)
+                .setMessage(entry.body.ifBlank { getString(R.string.m3t_updates_no_changelog) })
+                .setPositiveButton(getString(R.string.m3t_updates_open_release)) { _, _ ->
+                    openReleaseUrlWithFeedback(entry.releaseUrl)
+                }
+                .setNegativeButton(getString(R.string.m3t_updates_close), null)
+                .show()
+        }.onFailure {
+            Toast.makeText(this, R.string.update_open_detail_failed, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun handleDownload(entry: ReleaseEntry) {
-        if (BuildConfig.GITHUB_TOKEN.isNotBlank()) {
-            ApkDownloadUtil.enqueueApkDownload(this, entry)
-            return
-        }
-
-        val options = ReleaseUiUtil.mirroredDownloadOptions(entry.apkUrl)
-        if (options.isEmpty()) {
-            ReleaseUiUtil.openUrl(this, entry.releaseUrl)
-            return
-        }
-
-        if (options.size == 1) {
-            ReleaseUiUtil.openUrl(this, options.first().second)
-            return
-        }
-
-        val names = options.map { it.first }.toTypedArray()
-        MaterialAlertDialogBuilder(this, R.style.BlueGlassAlertDialog)
-            .setTitle("选择下载源")
-            .setItems(names) { _, which ->
-                ReleaseUiUtil.openUrl(this, options[which].second)
+        runCatching {
+            if (BuildConfig.GITHUB_TOKEN.isNotBlank()) {
+                val submitted = ApkDownloadUtil.enqueueApkDownload(this, entry)
+                if (!submitted) {
+                    Toast.makeText(this, R.string.update_download_submit_failed, Toast.LENGTH_SHORT).show()
+                    openReleaseUrlWithFeedback(entry.releaseUrl)
+                }
+                return
             }
-            .setNegativeButton("取消", null)
-            .show()
+
+            if (entry.apkUrl.isNullOrBlank()) {
+                Toast.makeText(this, R.string.update_apk_missing_fallback_release, Toast.LENGTH_SHORT).show()
+                openReleaseUrlWithFeedback(entry.releaseUrl)
+                return
+            }
+
+            val options = ReleaseUiUtil.mirroredDownloadOptions(entry.apkUrl)
+            if (options.isEmpty()) {
+                Toast.makeText(this, R.string.update_apk_missing_fallback_release, Toast.LENGTH_SHORT).show()
+                openReleaseUrlWithFeedback(entry.releaseUrl)
+                return
+            }
+
+            if (options.size == 1) {
+                openReleaseUrlWithFeedback(options.first().second)
+                return
+            }
+
+            val names = options.map { it.first }.toTypedArray()
+            MaterialAlertDialogBuilder(this, R.style.BlueGlassAlertDialog)
+                .setTitle(getString(R.string.m3t_updates_choose_source))
+                .setItems(names) { _, which ->
+                    openReleaseUrlWithFeedback(options[which].second)
+                }
+                .setNegativeButton(getString(R.string.m3t_action_cancel), null)
+                .show()
+        }.onFailure {
+            Toast.makeText(this, R.string.update_download_submit_failed, Toast.LENGTH_SHORT).show()
+            openReleaseUrlWithFeedback(entry.releaseUrl)
+        }
     }
 }

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Aries AI - Android UI Automation Framework
  * Copyright (C) 2025-2026 ZG0704666
  *
@@ -70,6 +70,10 @@ class UiAutomationAgent(
         return desc?.trim()?.isNotBlank() == true
     }
 
+    private fun isValidDoAction(action: ParsedAgentAction, enforceDesc: Boolean): Boolean {
+        return action.metadata == "do" && (!enforceDesc || hasNonEmptyDesc(action))
+    }
+
     private fun resolveActionSubtitle(action: ParsedAgentAction): String {
         val actionName = action.actionName.orEmpty()
         val displayActionName = ActionUtils.getDisplayActionName(actionName, action.fields)
@@ -100,6 +104,7 @@ class UiAutomationAgent(
             apiKey: String,
             baseUrl: String,
             model: String,
+            useThirdPartyApi: Boolean = false,
             task: String,
             service: PhoneAgentAccessibilityService?,
             control: Control = NoopControl,
@@ -137,7 +142,18 @@ class UiAutomationAgent(
 
         // try-finally 确保虚拟屏资源在任何退出路径下都被清理
         try {
-            return runAgentLoop(apiKey, baseUrl, model, task, service, control, onLog, screenW, screenH)
+            return runAgentLoop(
+                    apiKey,
+                    baseUrl,
+                    model,
+                    useThirdPartyApi,
+                    task,
+                    service,
+                    control,
+                    onLog,
+                    screenW,
+                    screenH
+            )
         } finally {
             // 清理虚拟屏及预览悬浮窗
             cleanupVirtualDisplay(service)
@@ -149,6 +165,7 @@ class UiAutomationAgent(
             apiKey: String,
             baseUrl: String,
             model: String,
+            useThirdPartyApi: Boolean,
             task: String,
             service: PhoneAgentAccessibilityService?,
             control: Control,
@@ -175,7 +192,13 @@ class UiAutomationAgent(
         history +=
                 ChatRequestMessage(
                         role = "system",
-                        content = PromptTemplates.buildSystemPrompt(screenW, screenH, null)
+                        content =
+                                PromptTemplates.buildSystemPrompt(
+                                        screenW = screenW,
+                                        screenH = screenH,
+                                        config = null,
+                                        enforceDesc = useThirdPartyApi
+                                )
                 )
 
         // 清理缓存
@@ -369,6 +392,7 @@ class UiAutomationAgent(
                             apiKey = apiKey,
                             baseUrl = baseUrl,
                             model = model,
+                            enforceDesc = useThirdPartyApi,
                             history = history,
                             step = step,
                             answerText = answer,
@@ -435,11 +459,15 @@ class UiAutomationAgent(
                 val isTypeAction =
                         actionName == "type" || actionName == "input" || actionName == "text"
                 val wasPreviousTap = lastActionWasTap
+                val shouldCombineTapAndType =
+                        isTypeAction &&
+                                wasPreviousTap &&
+                                (config.useShizukuInteraction || config.useBackgroundVirtualDisplay)
 
                 execOk =
                         try {
                             val result =
-                                    if (isTypeAction && wasPreviousTap) {
+                                    if (shouldCombineTapAndType) {
                                         // 合并执行
                                         val previousTapAction = lastTapAction
                                         lastActionWasTap = false
@@ -523,7 +551,11 @@ class UiAutomationAgent(
                 )
 
                 // 构建修复消息
-                val failMsg = PromptTemplates.buildActionRepairPrompt(currentAction.raw)
+                val failMsg =
+                        PromptTemplates.buildActionRepairPrompt(
+                                currentAction.raw,
+                                enforceDesc = useThirdPartyApi
+                        )
                 history += ChatRequestMessage(role = "user", content = failMsg)
 
                 val fixResult =
@@ -563,6 +595,7 @@ class UiAutomationAgent(
                                 apiKey = apiKey,
                                 baseUrl = baseUrl,
                                 model = model,
+                                enforceDesc = useThirdPartyApi,
                                 history = history,
                                 step = step,
                                 answerText = fixAnswer,
@@ -937,6 +970,8 @@ class UiAutomationAgent(
 
         if (element == null) {
             onLog("[合并执行] 无法获取点击坐标，回退到分别执行")
+            val tapOk = actionExecutor.execute(tapAction, service, uiDump, screenW, screenH, onLog)
+            if (!tapOk) return false
             return actionExecutor.execute(typeAction, service, uiDump, screenW, screenH, onLog)
         }
 
@@ -956,7 +991,17 @@ class UiAutomationAgent(
             VirtualDisplayController.injectTapBestEffort(displayId, x.toInt(), y.toInt())
             delay(config.tapTypeCombineKeyboardWaitMs)
 
-            val result = actionExecutor.injectTextOnVirtualDisplay(displayId, inputText, onLog)
+            var result = actionExecutor.injectTextOnVirtualDisplay(displayId, inputText, onLog)
+            if (!result) {
+                onLog("[合并执行] 虚拟屏输入失败，补一次点击后重试")
+                VirtualDisplayController.injectTapBestEffort(displayId, x.toInt(), y.toInt())
+                delay(config.tapTypeCombineSecondSetTextWaitMs)
+                result = actionExecutor.injectTextOnVirtualDisplay(displayId, inputText, onLog)
+            }
+            if (!result && service != null) {
+                onLog("[合并执行] 虚拟屏输入仍失败，回退到无障碍输入兜底")
+                return actionExecutor.execute(typeAction, service, uiDump, screenW, screenH, onLog)
+            }
             return result
         }
 
@@ -994,6 +1039,11 @@ class UiAutomationAgent(
                 }
             }
 
+            if (!ok) {
+                onLog("[合并执行] 输入仍失败，回退到独立 Type 执行")
+                return actionExecutor.execute(typeAction, service, uiDump, screenW, screenH, onLog)
+            }
+
             return ok
         } finally {
             AutomationOverlay.restoreVisibility()
@@ -1005,6 +1055,7 @@ class UiAutomationAgent(
             apiKey: String,
             baseUrl: String,
             model: String,
+            enforceDesc: Boolean,
             history: MutableList<ChatRequestMessage>,
             step: Int,
             answerText: String,
@@ -1016,16 +1067,16 @@ class UiAutomationAgent(
         if (action.metadata == "finish") {
             return action
         }
-        if (action.metadata == "do" && hasNonEmptyDesc(action)) {
+        if (isValidDoAction(action, enforceDesc)) {
             return action
         }
-        if (action.metadata == "do" && !hasNonEmptyDesc(action)) {
+        if (enforceDesc && action.metadata == "do" && !hasNonEmptyDesc(action)) {
             onLog("[Step $step] 动作缺少 desc，尝试让模型补齐说明")
         }
 
         var attempt = 0
         while (attempt < config.maxParseRepairs &&
-                !(action.metadata == "finish" || (action.metadata == "do" && hasNonEmptyDesc(action)))) {
+                !(action.metadata == "finish" || isValidDoAction(action, enforceDesc))) {
             attempt++
             onLog("[Step $step] 输出无法解析为动作，尝试修正（$attempt/${config.maxParseRepairs}）…")
 
@@ -1034,7 +1085,10 @@ class UiAutomationAgent(
             history.firstOrNull { it.role == "system" }?.let { repairHistory.add(it) }
             history.lastOrNull { it.role == "user" }?.let { repairHistory.add(it) }
             repairHistory.add(
-                    ChatRequestMessage(role = "user", content = PromptTemplates.buildRepairPrompt())
+                    ChatRequestMessage(
+                            role = "user",
+                            content = PromptTemplates.buildRepairPrompt(enforceDesc = enforceDesc)
+                    )
             )
 
             val repairResult =

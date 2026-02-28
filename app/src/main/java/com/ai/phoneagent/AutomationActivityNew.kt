@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Aries AI - Android UI Automation Framework
  * Copyright (C) 2025-2026 ZG0704666
  *
@@ -20,6 +20,7 @@ package com.ai.phoneagent
 import android.Manifest
 import android.animation.ObjectAnimator
 import android.animation.PropertyValuesHolder
+import android.content.res.ColorStateList
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -51,6 +52,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.NestedScrollView
 import androidx.lifecycle.lifecycleScope
+import com.ai.phoneagent.core.automation.AutomationInstructionRequest
+import com.ai.phoneagent.core.automation.AutomationLogBridge
 import com.ai.phoneagent.core.config.AgentConfiguration
 import com.ai.phoneagent.core.tools.AIToolHandler
 import com.ai.phoneagent.core.tools.ToolRegistration
@@ -58,7 +61,7 @@ import com.ai.phoneagent.databinding.ActivityAutomationBinding
 import com.ai.phoneagent.net.AutoGlmClient
 import com.ai.phoneagent.speech.SherpaSpeechRecognizer
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.switchmaterial.SwitchMaterial
+import com.google.android.material.materialswitch.MaterialSwitch
 import rikka.shizuku.Shizuku
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +76,10 @@ class AutomationActivityNew : AppCompatActivity() {
 
     companion object {
         const val EXTRA_FORCE_TOP_ON_ENTRY = "force_top_on_entry"
+        const val EXTRA_AUTOMATION_TASK = "automation_task"
+        const val EXTRA_AUTOMATION_SOURCE = "automation_source"
+        const val EXTRA_AUTOMATION_AUTO_START = "automation_auto_start"
+        const val EXTRA_KEEP_MAIN_ON_TOP = "keep_main_on_top"
         private const val SHIZUKU_PERMISSION_REQUEST_CODE = 2026
     }
 
@@ -96,13 +103,14 @@ class AutomationActivityNew : AppCompatActivity() {
     private lateinit var tvLog: TextView
     private lateinit var etTask: EditText
     private lateinit var btnVoiceTask: View
-    private lateinit var btnOpenAccessibility: View
+    private lateinit var btnOpenAccessibilitySettings: MaterialButton
+    private lateinit var btnShizukuAuthorize: MaterialButton
     private lateinit var btnRefreshAccessibility: View
     private lateinit var btnStartAgent: MaterialButton
     private lateinit var btnPauseAgent: MaterialButton
     private lateinit var btnStopAgent: MaterialButton
 
-    private lateinit var switchShizukuInteraction: SwitchMaterial
+    private lateinit var switchShizukuInteraction: MaterialSwitch
 
     // 执行模式相关
     private lateinit var rgExecutionMode: RadioGroup
@@ -119,8 +127,12 @@ class AutomationActivityNew : AppCompatActivity() {
     private var pendingStartVoice: Boolean = false
 
     private var virtualDisplayStatusJob: Job? = null
+    private var accessibilityStatusSyncJob: Job? = null
 
     private var autoScrollLogToBottom: Boolean = true
+    private var mirrorLogsToMain: Boolean = false
+    private var overlayClickReturnToMain: Boolean = false
+    private var lastDispatchedTask: String? = null
 
     // 运行结果保存相关
     private val PREFS_NAME = "automation_results"
@@ -181,10 +193,18 @@ class AutomationActivityNew : AppCompatActivity() {
             }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val keepMainOnTop =
+                intent?.getBooleanExtra(EXTRA_KEEP_MAIN_ON_TOP, false) == true
+        if (keepMainOnTop) {
+            setTheme(R.style.Theme_M3t_TransparentLaunch)
+        }
         super.onCreate(savedInstanceState)
 
         binding = ActivityAutomationBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        if (keepMainOnTop) {
+            overridePendingTransition(0, 0)
+        }
 
         val forceTopOnEntry = intent?.getBooleanExtra(EXTRA_FORCE_TOP_ON_ENTRY, false) == true
         autoScrollLogToBottom = !forceTopOnEntry
@@ -193,7 +213,7 @@ class AutomationActivityNew : AppCompatActivity() {
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             WindowCompat.getInsetsController(window, binding.root).isAppearanceLightStatusBars =
-                    true
+                    resources.getBoolean(R.bool.m3t_light_system_bars)
         }
 
         val initialTop = binding.root.paddingTop
@@ -228,9 +248,12 @@ class AutomationActivityNew : AppCompatActivity() {
             btnVoiceTask =
                     binding.root.findViewById(R.id.btnVoiceTask)
                             ?: throw NullPointerException("btnVoiceTask not found")
-            btnOpenAccessibility =
-                    binding.root.findViewById(R.id.btnOpenAccessibility)
-                            ?: throw NullPointerException("btnOpenAccessibility not found")
+            btnOpenAccessibilitySettings =
+                    binding.root.findViewById(R.id.btnOpenAccessibilitySettings)
+                            ?: throw NullPointerException("btnOpenAccessibilitySettings not found")
+            btnShizukuAuthorize =
+                    binding.root.findViewById(R.id.btnShizukuAuthorize)
+                            ?: throw NullPointerException("btnShizukuAuthorize not found")
             btnRefreshAccessibility =
                     binding.root.findViewById(R.id.btnRefreshAccessibility)
                             ?: throw NullPointerException("btnRefreshAccessibility not found")
@@ -309,15 +332,32 @@ class AutomationActivityNew : AppCompatActivity() {
                 VirtualDisplayConfig.getUseShizukuInteraction(this@AutomationActivityNew)
         switchShizukuInteraction.setOnCheckedChangeListener { _, checked ->
             VirtualDisplayConfig.setUseShizukuInteraction(this@AutomationActivityNew, checked)
-            if (checked && !ensureShizukuPermissionGranted()) {
+            if (checked) {
                 val state = collectRuntimeConnectionState()
-                val msg =
-                        if (!state.shizukuBinderConnected) {
-                            "未检测到 Shizuku 服务连接，请先启动 Shizuku"
-                        } else {
-                            "未检测到 Shizuku 授权，已发起授权请求，请先在弹窗中授予"
-                        }
-                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                if (!state.shizukuBinderConnected) {
+                    Toast.makeText(this, "未检测到 Shizuku 服务连接，请先启动 Shizuku", Toast.LENGTH_SHORT).show()
+                    checkAccessibilityStatus()
+                    return@setOnCheckedChangeListener
+                }
+                if (!state.shizukuPermissionGranted && !ensureShizukuPermissionGranted()) {
+                    Toast.makeText(this, "未检测到 Shizuku 授权，已发起授权请求，请先在弹窗中授予", Toast.LENGTH_SHORT).show()
+                    checkAccessibilityStatus()
+                    return@setOnCheckedChangeListener
+                }
+
+                val latestState = collectRuntimeConnectionState()
+                if (!latestState.accessibilityEnabled && latestState.shizukuReady) {
+                    val granted = grantAccessibilityViaShizuku()
+                    if (granted) {
+                        Toast.makeText(this, "已通过 Shizuku 自动开启无障碍", Toast.LENGTH_SHORT).show()
+                        refreshStatusAfterOneTapAuthorize()
+                    } else {
+                        Toast.makeText(this, "Shizuku 自动开启无障碍失败，请手动开启", Toast.LENGTH_SHORT).show()
+                    }
+                } else if (latestState.accessibilityEnabled && !latestState.accessibilityConnected) {
+                    Toast.makeText(this, "无障碍已开启，正在等待服务连接…", Toast.LENGTH_SHORT).show()
+                    refreshStatusAfterOneTapAuthorize()
+                }
             }
             checkAccessibilityStatus()
         }
@@ -341,9 +381,14 @@ class AutomationActivityNew : AppCompatActivity() {
             finish()
         }
 
-        btnOpenAccessibility.setOnClickListener {
+        btnOpenAccessibilitySettings.setOnClickListener {
             vibrateLight()
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            openAccessibilitySettings()
+        }
+
+        btnShizukuAuthorize.setOnClickListener {
+            vibrateLight()
+            handleShizukuAuthorizeClick()
         }
 
         btnRefreshAccessibility.setOnClickListener {
@@ -362,7 +407,11 @@ class AutomationActivityNew : AppCompatActivity() {
 
         btnStartAgent.setOnClickListener {
             vibrateLight()
-            startAgent()
+            if (agentJob != null) {
+                stopAgent()
+            } else {
+                startAgent()
+            }
         }
 
         btnPauseAgent.setOnClickListener {
@@ -380,9 +429,13 @@ class AutomationActivityNew : AppCompatActivity() {
 
         btnPauseAgent.isEnabled = false
         btnStopAgent.isEnabled = false
+        btnStopAgent.visibility = View.VISIBLE
+        syncStartButtonState(canStart = false)
 
         // 初始检查
         checkAccessibilityStatus()
+
+        consumeDispatchedInstruction(intent)
 
         // 监听虚拟屏预览窗关闭事件 - 添加异常处理
         try {
@@ -404,16 +457,39 @@ class AutomationActivityNew : AppCompatActivity() {
         initSherpaModel()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeDispatchedInstruction(intent)
+    }
+
     override fun onStop() {
+        accessibilityStatusSyncJob?.cancel()
+        accessibilityStatusSyncJob = null
         stopLocalVoiceInput(triggerRecognizerStop = true)
         super.onStop()
     }
 
     override fun onResume() {
         super.onResume()
-        checkAccessibilityStatus()
+        scheduleAccessibilityStatusSync()
         // 恢复上一次运行结果
         restoreLastRunResult()
+    }
+
+    private fun scheduleAccessibilityStatusSync(
+            totalDurationMs: Long = 12000L,
+            pollMs: Long = 300L
+    ) {
+        accessibilityStatusSyncJob?.cancel()
+        accessibilityStatusSyncJob =
+                lifecycleScope.launch {
+                    val deadline = System.currentTimeMillis() + totalDurationMs
+                    while (System.currentTimeMillis() <= deadline) {
+                        checkAccessibilityStatus()
+                        delay(pollMs)
+                    }
+                }
     }
 
     /** 保存运行结果到本地 */
@@ -464,6 +540,63 @@ class AutomationActivityNew : AppCompatActivity() {
         }
     }
 
+    private fun consumeDispatchedInstruction(dispatchIntent: Intent?) {
+        val safeIntent = dispatchIntent ?: return
+        val task = safeIntent.getStringExtra(EXTRA_AUTOMATION_TASK)?.trim().orEmpty()
+        if (task.isBlank()) return
+
+        val source = safeIntent.getStringExtra(EXTRA_AUTOMATION_SOURCE)?.trim().orEmpty()
+        val autoStart = safeIntent.getBooleanExtra(EXTRA_AUTOMATION_AUTO_START, false)
+        val keepMainOnTop = safeIntent.getBooleanExtra(EXTRA_KEEP_MAIN_ON_TOP, false)
+        safeIntent.removeExtra(EXTRA_AUTOMATION_TASK)
+        safeIntent.removeExtra(EXTRA_AUTOMATION_SOURCE)
+        safeIntent.removeExtra(EXTRA_AUTOMATION_AUTO_START)
+        safeIntent.removeExtra(EXTRA_KEEP_MAIN_ON_TOP)
+
+        mirrorLogsToMain =
+                source == AutomationInstructionRequest.Source.MANUAL_AGENT_MODE.wireValue ||
+                        source == AutomationInstructionRequest.Source.ADVANCED_AI.wireValue
+        overlayClickReturnToMain = mirrorLogsToMain
+        lastDispatchedTask = task
+
+        etTask.setText(task)
+        etTask.setSelection(etTask.text?.length ?: 0)
+
+        if (source.isNotBlank()) {
+            appendLog("接收任务来源：$source")
+        }
+        appendLog("接收任务：$task")
+
+        if (!autoStart) return
+
+        if (agentJob != null) {
+            appendLog("当前自动化任务仍在执行，暂不自动启动新任务")
+            Toast.makeText(this, "当前有任务在执行，请先停止再重试", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (keepMainOnTop) {
+            bringMainActivityToFront()
+        }
+        binding.root.post {
+            if (agentJob == null) {
+                startAgent()
+            }
+        }
+    }
+
+    private fun bringMainActivityToFront() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            Intent.FLAG_ACTIVITY_NO_ANIMATION
+            )
+        }
+        startActivity(intent)
+        overridePendingTransition(0, 0)
+    }
+
     /** 清除保存的运行结果 */
     private fun clearLastRunResult() {
         try {
@@ -483,6 +616,32 @@ class AutomationActivityNew : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e("AutomationActivityNew", "工具系统初始化失败: ${e.message}", e)
             appendLog("⚠️ 工具系统初始化失败: ${e.message}")
+        }
+    }
+
+    private fun syncStartButtonState(canStart: Boolean) {
+        if (!::btnStartAgent.isInitialized) return
+        val running = agentJob != null
+        if (::btnStopAgent.isInitialized) {
+            btnStopAgent.visibility = View.VISIBLE
+            btnStopAgent.isEnabled = running
+        }
+        if (running) {
+            btnStartAgent.isEnabled = true
+            btnStartAgent.text = getString(R.string.automation_terminate)
+            btnStartAgent.icon = ContextCompat.getDrawable(this, R.drawable.ic_stop_24)
+            btnStartAgent.iconTint =
+                ColorStateList.valueOf(ContextCompat.getColor(this, R.color.m3t_on_error))
+            btnStartAgent.backgroundTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(this, R.color.m3t_error))
+            btnStartAgent.setTextColor(ContextCompat.getColor(this, R.color.m3t_on_error))
+        } else {
+            btnStartAgent.isEnabled = canStart
+            btnStartAgent.text = getString(R.string.automation_start_now)
+            btnStartAgent.icon = null
+            btnStartAgent.backgroundTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(this, R.color.m3t_primary))
+            btnStartAgent.setTextColor(ContextCompat.getColor(this, R.color.m3t_on_primary))
         }
     }
 
@@ -509,7 +668,12 @@ class AutomationActivityNew : AppCompatActivity() {
                         canStart -> "已就绪：可开始执行"
                         useShizukuInteraction && !state.shizukuBinderConnected ->
                                 "未就绪：Shizuku 未连接"
-                        useShizukuInteraction -> "未就绪：Shizuku 未授权"
+                        useShizukuInteraction && !state.shizukuPermissionGranted ->
+                                "未就绪：Shizuku 未授权"
+                        useShizukuInteraction && !state.accessibilityEnabled ->
+                                "未就绪：无障碍未开启"
+                        useShizukuInteraction && !state.accessibilityConnected ->
+                                "未就绪：无障碍连接中"
                         state.shizukuReady -> "未就绪：仅检测到 Shizuku，请开启 Shizuku 模式"
                         else -> "未就绪：无障碍未连接"
                     }
@@ -531,12 +695,93 @@ class AutomationActivityNew : AppCompatActivity() {
                         "请先满足当前模式的连接条件后再开始"
                     }
             etTask?.isEnabled = true
-            btnOpenAccessibility?.visibility =
-                    if (!useShizukuInteraction && !state.accessibilityConnected) View.VISIBLE
-                    else View.GONE
-            btnStartAgent?.isEnabled = canStart && agentJob == null
+            btnOpenAccessibilitySettings.visibility = View.VISIBLE
+            btnOpenAccessibilitySettings.isEnabled = true
+
+            btnShizukuAuthorize.visibility = View.VISIBLE
+            btnShizukuAuthorize.isEnabled = state.shizukuBinderConnected
+            btnShizukuAuthorize.alpha = if (state.shizukuBinderConnected) 1f else 0.55f
+            syncStartButtonState(canStart)
         } catch (e: Exception) {
             Log.e("AutomationActivityNew", "检查无障碍服务状态失败: ${e.message}", e)
+        }
+    }
+
+    private fun openAccessibilitySettings() {
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
+    private fun handleShizukuAuthorizeClick() {
+        val state = collectRuntimeConnectionState()
+        if (!state.shizukuBinderConnected) {
+            Toast.makeText(this, R.string.automation_shizuku_not_connected, Toast.LENGTH_SHORT).show()
+            checkAccessibilityStatus()
+            return
+        }
+        if (!state.shizukuPermissionGranted) {
+            ensureShizukuPermissionGranted()
+            Toast.makeText(this, R.string.automation_shizuku_permission_requested, Toast.LENGTH_SHORT).show()
+            checkAccessibilityStatus()
+            return
+        }
+        val granted = grantAccessibilityViaShizuku()
+        if (granted) {
+            Toast.makeText(this, R.string.automation_shizuku_authorize_success, Toast.LENGTH_SHORT).show()
+            checkAccessibilityStatus()
+            refreshStatusAfterOneTapAuthorize()
+            return
+        }
+        Toast.makeText(this, R.string.automation_shizuku_authorize_failed, Toast.LENGTH_SHORT).show()
+        checkAccessibilityStatus()
+    }
+
+    private fun grantAccessibilityViaShizuku(): Boolean {
+        if (isAccessibilityServiceEnabled()) return true
+        if (!ShizukuBridge.isShizukuAvailable()) return false
+
+        val existing =
+                Settings.Secure.getString(
+                        contentResolver,
+                        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                )
+                        ?: ""
+        val services = existing.split(':').map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+        if (!services.any { it.equals(serviceId, ignoreCase = true) }) {
+            services.add(serviceId)
+        }
+
+        val enableList = services.joinToString(":")
+        val setServicesResult =
+                runCatching {
+                    ShizukuBridge.execResultArgs(
+                            listOf("settings", "put", "secure", "enabled_accessibility_services", enableList)
+                    )
+                }.getOrNull()
+        val enableServiceResult =
+                runCatching {
+                    ShizukuBridge.execResultArgs(
+                            listOf("settings", "put", "secure", "accessibility_enabled", "1")
+                    )
+                }.getOrNull()
+
+        if (setServicesResult == null || setServicesResult.exitCode != 0) return false
+        if (enableServiceResult == null || enableServiceResult.exitCode != 0) return false
+        return isAccessibilityServiceEnabled()
+    }
+
+    private fun refreshStatusAfterOneTapAuthorize() {
+        lifecycleScope.launch {
+            repeat(12) {
+                val state = collectRuntimeConnectionState()
+                checkAccessibilityStatus()
+                val canStart =
+                        resolveRuntimeInteractionPreference(
+                                switchShizukuInteraction.isChecked,
+                                state
+                        ) != null
+                if (canStart) return@launch
+                delay(250L)
+            }
         }
     }
 
@@ -549,8 +794,7 @@ class AutomationActivityNew : AppCompatActivity() {
             state: RuntimeConnectionState
     ): Boolean? {
         return when {
-            preferShizuku && state.shizukuReady -> true
-            preferShizuku && state.accessibilityConnected -> false
+            preferShizuku && state.shizukuReady && state.accessibilityConnected -> true
             !preferShizuku && state.accessibilityConnected -> false
             else -> null
         }
@@ -596,6 +840,7 @@ class AutomationActivityNew : AppCompatActivity() {
             Toast.makeText(this, "请输入任务", Toast.LENGTH_SHORT).show()
             return
         }
+        val fromHomeDispatch = overlayClickReturnToMain && lastDispatchedTask == task
 
         val apiKey = getApiKey()
         if (apiKey.isBlank()) {
@@ -605,7 +850,25 @@ class AutomationActivityNew : AppCompatActivity() {
 
         val baseUrl = resolveApiBaseUrl()
         val model = resolveAutomationModel()
+        val useThirdPartyApi =
+                getSharedPreferences("app_prefs", MODE_PRIVATE).getBoolean(apiUseThirdPartyPref, false)
         val useShizukuInteraction = switchShizukuInteraction.isChecked
+        if (useShizukuInteraction) {
+            val beforeState = collectRuntimeConnectionState()
+            if (beforeState.shizukuBinderConnected &&
+                    beforeState.shizukuPermissionGranted &&
+                    !beforeState.accessibilityEnabled) {
+                val granted = grantAccessibilityViaShizuku()
+                if (granted) {
+                    appendLog("Shizuku 模式：已自动开启无障碍，等待服务连接…")
+                    refreshStatusAfterOneTapAuthorize()
+                } else {
+                    Toast.makeText(this, "Shizuku 模式下自动开启无障碍失败，请手动开启", Toast.LENGTH_SHORT).show()
+                    checkAccessibilityStatus()
+                    return
+                }
+            }
+        }
         val state = collectRuntimeConnectionState()
         val effectiveUseShizuku = resolveRuntimeInteractionPreference(useShizukuInteraction, state)
 
@@ -618,6 +881,8 @@ class AutomationActivityNew : AppCompatActivity() {
                     } else if (useShizukuInteraction && state.shizukuBinderConnected && !state.shizukuPermissionGranted) {
                         ensureShizukuPermissionGranted()
                         "Shizuku 未授权，已发起授权请求，请授权后重试"
+                    } else if (useShizukuInteraction && state.shizukuReady && state.accessibilityEnabled) {
+                        "Shizuku 模式正在等待无障碍服务连接，请稍候重试"
                     } else if (state.accessibilityEnabled) {
                         "无障碍服务正在连接，请稍候后重试"
                     } else {
@@ -645,6 +910,7 @@ class AutomationActivityNew : AppCompatActivity() {
                             subtitle = task.take(20),
                             maxSteps = 100,
                             activity = this,
+                            navigateMainOnClick = fromHomeDispatch,
                     )
             if (ok) {
                 // 保持前台，避免在不同模式下出现“闪回桌面/主界面”的体感问题
@@ -655,7 +921,8 @@ class AutomationActivityNew : AppCompatActivity() {
             Toast.makeText(this, "如需显示进度悬浮窗，请授予悬浮窗权限", Toast.LENGTH_SHORT).show()
         }
 
-        btnStartAgent.isEnabled = false
+        syncStartButtonState(canStart = true)
+        lastDispatchedTask = null
         btnPauseAgent.isEnabled = true
         paused = false
         btnPauseAgent.text = "暂停"
@@ -666,7 +933,7 @@ class AutomationActivityNew : AppCompatActivity() {
                     try {
                         val svc =
                                 if (effectiveUseShizuku) {
-                                    PhoneAgentAccessibilityService.instance
+                                    waitForAccessibilityServiceConnection(timeoutMs = 4500L)
                                 } else {
                                     waitForAccessibilityServiceConnection()
                                 }
@@ -676,7 +943,9 @@ class AutomationActivityNew : AppCompatActivity() {
                             return@launch
                         }
                         if (effectiveUseShizuku && svc == null) {
-                            appendLog("Shizuku 模式：未检测到无障碍连接，将以 Shizuku-only 路径执行")
+                            appendLog("Shizuku 模式：无障碍服务未连接，已停止执行")
+                            AutomationOverlay.complete("Shizuku 模式需无障碍连接")
+                            return@launch
                         }
 
                         val config =
@@ -698,6 +967,7 @@ class AutomationActivityNew : AppCompatActivity() {
                                         apiKey = apiKey,
                                         baseUrl = baseUrl,
                                         model = model,
+                                        useThirdPartyApi = useThirdPartyApi,
                                         task = task,
                                         service = svc,
                                         control =
@@ -843,6 +1113,7 @@ class AutomationActivityNew : AppCompatActivity() {
     /** 停止Agent */
     private fun stopAgent() {
         val job = agentJob
+        val hadRunning = job != null
         if (job != null) {
             job.cancel()
         }
@@ -852,6 +1123,9 @@ class AutomationActivityNew : AppCompatActivity() {
         btnPauseAgent.text = "暂停"
         btnStopAgent.isEnabled = false
         appendLog("已请求停止")
+        if (!hadRunning) {
+            appendLog("已停止")
+        }
         AutomationOverlay.hide()
         // 清理虚拟屏预览
         VirtualScreenPreviewOverlay.hide()
@@ -1124,6 +1398,9 @@ class AutomationActivityNew : AppCompatActivity() {
         runOnUiThread {
             tvLog.append("$message\n")
             AutomationOverlay.updateFromLogLine(message)
+            if (mirrorLogsToMain) {
+                AutomationLogBridge.publish(this@AutomationActivityNew, message)
+            }
 
             if (autoScrollLogToBottom) {
                 // 自动滚动到底部
