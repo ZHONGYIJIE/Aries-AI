@@ -22,9 +22,7 @@ val githubToken: String by lazy {
 
 android {
     namespace = "com.ai.phoneagent"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     externalNativeBuild {
         cmake {
@@ -166,6 +164,14 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.8.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("androidx.compose.runtime:runtime-livedata")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+    
+    // ViewModel 和 LiveData
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.8.7")
+    
+    // PDF 处理
+    implementation("com.itextpdf:itext7-core:7.2.5")
 }

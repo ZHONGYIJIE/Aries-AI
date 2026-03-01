@@ -181,7 +181,7 @@ val agent = UiAutomationAgent(
 // 2. 执行任务
 val result = agent.run(
     apiKey = "your-api-key",
-    model = "glm-4v-plus",
+    model = "glm-4.6v-flash",  // 主页默认模型，自动化界面默认使用 autoglm-phone
     task = "打开微信发消息给张三",
     service = accessibilityService,
     onLog = { log -> println(log) }
