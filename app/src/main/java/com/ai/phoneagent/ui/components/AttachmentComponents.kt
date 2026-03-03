@@ -8,6 +8,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -33,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,6 +42,7 @@ import androidx.core.content.ContextCompat.getSystemService
 import androidx.core.content.FileProvider
 import com.ai.phoneagent.data.AttachmentInfo
 import com.ai.phoneagent.helper.AttachmentManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -56,19 +59,28 @@ fun AttachmentSelectorPanel(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    
-    // 图片选择器
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents()
-    ) { uris: List<Uri> ->
+
+    fun processPickedUris(uris: List<Uri>) {
         if (uris.isNotEmpty()) {
             coroutineScope.launch {
                 uris.forEach { uri ->
                     attachmentManager.handleAttachment(uri.toString())
                 }
-                onDismiss()
             }
         }
+    }
+    
+    // 图片选择器
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        processPickedUris(uris)
+    }
+
+    val systemPhotoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(20)
+    ) { uris: List<Uri> ->
+        processPickedUris(uris)
     }
     
     // 文件选择器
@@ -81,6 +93,21 @@ fun AttachmentSelectorPanel(
                     attachmentManager.handleAttachment(uri.toString())
                 }
                 onDismiss()
+            }
+        }
+    }
+
+    val launchImagePicker: () -> Unit = {
+        onDismiss()
+        coroutineScope.launch {
+            // 让底部面板先完成收起，避免与系统选择器过渡时颜色不一致
+            delay(120)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                systemPhotoPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            } else {
+                imagePickerLauncher.launch("image/*")
             }
         }
     }
@@ -110,7 +137,7 @@ fun AttachmentSelectorPanel(
         AttachmentOption(
             icon = Icons.Default.Image,
             label = "相册",
-            onClick = { imagePickerLauncher.launch("image/*") }
+            onClick = launchImagePicker
         ),
         AttachmentOption(
             icon = Icons.Default.Description,
@@ -183,12 +210,13 @@ fun AttachmentPreviewList(
     modifier: Modifier = Modifier
 ) {
     if (attachments.isEmpty()) return
+    val titleColor = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_preview_title)
     
     Column(modifier = modifier) {
         Text(
             text = "附件 (${attachments.size})",
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            color = titleColor,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
         )
         
@@ -220,6 +248,11 @@ private fun AttachmentPreviewItem(
     onRemove: () -> Unit,
     onInsert: () -> Unit
 ) {
+    val previewCardBg = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_preview_card_bg)
+    val previewCardStroke = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_preview_card_stroke)
+    val previewIconColor = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_preview_icon)
+    val previewNameColor = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_preview_name)
+    val previewSizeColor = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_preview_size)
     val icon = when {
         attachment.fileName.startsWith("camera_") -> Icons.Default.PhotoCamera
         attachment.mimeType.startsWith("image/") -> Icons.Default.Image
@@ -234,10 +267,10 @@ private fun AttachmentPreviewItem(
             .clip(RoundedCornerShape(8.dp))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                color = previewCardStroke,
                 shape = RoundedCornerShape(8.dp)
             )
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+            .background(previewCardBg)
             .clickable(onClick = onInsert)
     ) {
         Row(
@@ -248,7 +281,7 @@ private fun AttachmentPreviewItem(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = previewIconColor,
                 modifier = Modifier.size(24.dp)
             )
             
@@ -259,6 +292,7 @@ private fun AttachmentPreviewItem(
                 Text(
                     text = attachmentManager.getDisplayName(attachment),
                     style = MaterialTheme.typography.bodySmall,
+                    color = previewNameColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -267,7 +301,7 @@ private fun AttachmentPreviewItem(
                     Text(
                         text = attachmentManager.formatFileSize(attachment.fileSize),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = previewSizeColor
                     )
                 }
             }
@@ -300,6 +334,9 @@ private fun AttachmentOptionItem(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val optionBgColor = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_option_bg)
+    val optionIconColor = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_option_icon)
+    val optionTextColor = colorResource(id = com.ai.phoneagent.R.color.m3t_attachment_option_text)
     
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -317,15 +354,13 @@ private fun AttachmentOptionItem(
             modifier = Modifier
                 .size(68.dp)
                 .clip(RoundedCornerShape(20.dp))
-                .background(
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                ),
+                .background(optionBgColor),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                tint = optionIconColor,
                 modifier = Modifier.size(32.dp)
             )
         }
@@ -336,7 +371,7 @@ private fun AttachmentOptionItem(
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+            color = optionTextColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             fontSize = 14.sp

@@ -54,7 +54,7 @@
     <color name="m3t_floating_text_secondary">#5D7088</color>
     <color name="m3t_recommend_grad_start">#262A60AB</color>
     <color name="m3t_recommend_grad_end">#263B82F6</color>
-    <color name="m3t_dialog_surface">#FFFFFF</color>
+    <color name="m3t_dialog_surface">#E4F2FF</color>
     <color name="m3t_dialog_surface_alt">#E2F4E6</color>
     <color name="m3t_button_white">#FFFFFF</color>
     <color name="m3t_button_light_blue">#B3D9FF</color>
@@ -62,6 +62,50 @@
     <color name="m3t_automation_page_bg">#F6FAFF</color>
     <color name="m3t_about_card_bg">#E6F0FF</color>
     <color name="m3t_automation_card_bg">#DCEBFF</color>
+    <color name="m3t_virtual_welcome_bg">#FF000000</color>
+    <color name="m3t_virtual_welcome_text">#FFFFFFFF</color>
+    <color name="m3t_automation_progress_bg">#E8F5E9</color>
+    <color name="m3t_automation_progress_title">#2E7D32</color>
+    <color name="m3t_automation_progress_text">#424242</color>
+    <color name="m3t_automation_progress_text_secondary">#616161</color>
+    <color name="m3t_perm_sheet_handle">#E2E8F0</color>
+    <color name="m3t_perm_sheet_handle_tint">#CBD5E1</color>
+    <color name="m3t_perm_sheet_card_bg">#F8FAFC</color>
+    <color name="m3t_perm_sheet_separator">#F1F5F9</color>
+    <color name="m3t_attachment_option_bg">#E6F0FF</color>
+    <color name="m3t_attachment_option_icon">#1F4168</color>
+    <color name="m3t_attachment_option_text">#2A425F</color>
+    <color name="m3t_attachment_preview_title">#4A617F</color>
+    <color name="m3t_attachment_preview_card_bg">#EFF5FF</color>
+    <color name="m3t_attachment_preview_card_stroke">#B5C7DA</color>
+    <color name="m3t_attachment_preview_icon">#2F5D91</color>
+    <color name="m3t_attachment_preview_name">#1C314D</color>
+    <color name="m3t_attachment_preview_size">#5C738E</color>
+    <color name="m3t_vd_mini_bg">#DC2878DC</color>
+    <color name="m3t_vd_mini_stroke">#B4FFFFFF</color>
+    <color name="m3t_vd_bg_progress_bg">#E6282832</color>
+    <color name="m3t_vd_bg_progress_stroke">#64646496</color>
+    <color name="m3t_vd_bg_progress_text">#FFFFFFFF</color>
+    <color name="m3t_vd_bg_progress_close_text">#B4FFFFFF</color>
+    <color name="m3t_vd_container_bg">#E61E1E23</color>
+    <color name="m3t_vd_container_stroke">#64646478</color>
+    <color name="m3t_vd_header_bg">#C832323C</color>
+    <color name="m3t_vd_header_text">#FFFFFFFF</color>
+    <color name="m3t_vd_header_action">#C8FFFFFF</color>
+    <color name="m3t_vd_status_bg">#78000000</color>
+    <color name="m3t_vd_status_text">#C8C8C8C8</color>
+    <color name="m3t_vd_control_bar_bg">#DC282832</color>
+    <color name="m3t_vd_control_btn_bg">#3CFFFFFF</color>
+    <color name="m3t_voice_wave_start">#007AFF</color>
+    <color name="m3t_voice_wave_mid">#5856D6</color>
+    <color name="m3t_voice_wave_end">#FF2D55</color>
+    <color name="m3t_btn_glow_border_start">#77B6E6FF</color>
+    <color name="m3t_btn_glow_border_end">#3383CFFF</color>
+    <color name="m3t_btn_glow_inner_start">#1A6BA8FF</color>
+    <color name="m3t_btn_glow_inner_end">#00FFFFFF</color>
+    <color name="m3t_card_border_grad_start">#66B6E6FF</color>
+    <color name="m3t_card_border_grad_end">#3383CFFF</color>
+    <color name="m3t_circle_glass_bg">#266BA8FF</color>
 
     <!-- M3T Dimensions -->
     <dimen name="m3t_spacing_xxxs">2dp</dimen>
@@ -73,6 +117,12 @@
     <dimen name="m3t_spacing_xl">20dp</dimen>
     <dimen name="m3t_spacing_xxl">24dp</dimen>
     <dimen name="m3t_stroke_thin">1dp</dimen>
+    <dimen name="m3t_user_attachment_chip_size">24dp</dimen>
+    <dimen name="m3t_user_attachment_chip_icon_size">14dp</dimen>
+    <dimen name="m3t_user_attachment_chip_spacing">4dp</dimen>
+    <dimen name="m3t_user_attachment_chip_radius">8dp</dimen>
+    <dimen name="m3t_user_attachment_thumb_size">32dp</dimen>
+    <dimen name="m3t_user_attachment_name_max_width">148dp</dimen>
 
     <dimen name="m3t_radius_sm">12dp</dimen>
     <dimen name="m3t_radius_md">16dp</dimen>
@@ -309,7 +359,7 @@
     </style>
 
     <style name="Widget.M3t.DialogCard" parent="Widget.MaterialComponents.CardView">
-        <item name="cardBackgroundColor">#FFFFFF</item>
+        <item name="cardBackgroundColor">@color/m3t_dialog_surface</item>
         <item name="cardCornerRadius">@dimen/m3t_radius_xl</item>
         <item name="cardElevation">0dp</item>
         <item name="strokeWidth">0dp</item>

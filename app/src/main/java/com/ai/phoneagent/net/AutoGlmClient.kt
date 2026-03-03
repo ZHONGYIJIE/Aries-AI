@@ -19,6 +19,7 @@ package com.ai.phoneagent.net
 
 import com.google.gson.Gson
 import com.google.gson.JsonParser
+import okhttp3.Call
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -36,13 +37,14 @@ import com.ai.phoneagent.BuildConfig
 import java.io.IOException
 import java.net.URI
 import java.util.LinkedHashMap
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 共享 OkHttpClient 工厂
- * 使用连接池复用连接，提高性能
+ * 共享 OkHttpClient 工厂。
+ * 通过连接池复用连接，提高网络请求性能。
  */
 private object SharedHttpClient {
         val instance: OkHttpClient by lazy {
@@ -57,9 +59,9 @@ private object SharedHttpClient {
                 OkHttpClient.Builder()
                         .addInterceptor(logger)
                         .retryOnConnectionFailure(true)
-                        // 增加连接超时以适应慢速网络
+                        // 增加连接超时，适配慢速网络
                         .connectTimeout(60, TimeUnit.SECONDS)
-                        // 设置较长的读写超时以支持长时间模型响应
+                        // 读取超时设置更长，支持长时模型响应
                         .readTimeout(300, TimeUnit.SECONDS)
                         .writeTimeout(120, TimeUnit.SECONDS)
                         .callTimeout(360, TimeUnit.SECONDS)
@@ -71,8 +73,8 @@ private object SharedHttpClient {
         }
 
         /**
-         * 自动化场景专用：更短的超时，避免“请求模型”阶段长时间卡住。
-         * 注意：这不会让模型本身更快，但能让慢/异常连接更快失败并触发重试/降级。
+         * 自动化场景专用：使用更短超时，避免请求长时间卡住。
+         * 注意：这不会让模型本身更快，但能让慢/异常连接更快失败并触发重试或降级。
          */
         val fastInstance: OkHttpClient by lazy {
                 val logger =
@@ -96,8 +98,16 @@ private object SharedHttpClient {
         }
 }
 
-/** 简化版 AutoGLM 客户端：仅用于单轮对话与 API 健康检查。 默认 BASE_URL 指向智谱官方 OpenAI 兼容接口，可根据需要调整。 */
+/** 简化版 AutoGLM 客户端：用于单轮对话与 API 健康检查。 */
 object AutoGlmClient {
+
+        private const val API_CHECK_EXPECTED_REPLY = "xyla"
+
+        private val activeStreamCall = AtomicReference<Call?>(null)
+
+        fun cancelActiveStream() {
+                activeStreamCall.getAndSet(null)?.cancel()
+        }
 
         class ApiException(
                 val code: Int,
@@ -115,7 +125,7 @@ object AutoGlmClient {
                         cause
                 )
 
-        // 如需替换其他网关，可修改此处
+        // 如需切换到其他网关，可在此修改
         const val DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
         const val DEFAULT_MODEL = "glm-4.6v-flash"
         const val PHONE_MODEL = "autoglm-phone"
@@ -229,12 +239,7 @@ object AutoGlmClient {
                 frequencyPenalty: Float? = DEFAULT_FREQUENCY_PENALTY,
                 onReasoningDelta: (String) -> Unit,
                 onContentDelta: (String) -> Unit,
-                /**
-                 * 自动化早停：当上层已经拿到可解析的动作时可主动停止流式读取，缩短尾部等待。
-                 * 返回值仍按 success 处理（只要已收到过任意 delta）。
-                 */
                 shouldStop: (() -> Boolean)? = null,
-                /** 自动化场景可启用更短超时，避免长卡住 */
                 useFastTimeouts: Boolean = false,
         ): Result<Unit> {
                 return withContext(Dispatchers.IO) {
@@ -264,90 +269,103 @@ object AutoGlmClient {
                                                 .build()
 
                                 var receivedAnyDelta = false
-
-                                val client = if (useFastTimeouts) SharedHttpClient.fastInstance else SharedHttpClient.instance
+                                val client =
+                                        if (useFastTimeouts) SharedHttpClient.fastInstance
+                                        else SharedHttpClient.instance
                                 val call = client.newCall(request)
 
-                                call.execute().use { resp ->
-                                        if (!resp.isSuccessful) {
-                                                val errBody =
-                                                        runCatching { resp.body?.string() }.getOrNull()
-                                                return@withContext Result.failure(
-                                                        ApiException(resp.code, errBody, null)
-                                                )
-                                        }
+                                activeStreamCall.set(call)
 
-                                        val responseBody = resp.body
-                                                ?: return@withContext Result.failure(
-                                                        IOException("Empty response body")
-                                                )
-
-                                        val source = responseBody.source()
-
-                                        while (!source.exhausted()) {
-                                                // 尽早响应取消/早停，避免阻塞“请求模型”阶段
-                                                if (shouldStop?.invoke() == true) {
-                                                        call.cancel()
-                                                        break
+                                try {
+                                        call.execute().use { resp ->
+                                                if (!resp.isSuccessful) {
+                                                        val errBody =
+                                                                runCatching { resp.body?.string() }.getOrNull()
+                                                        return@withContext Result.failure(
+                                                                ApiException(resp.code, errBody, null)
+                                                        )
                                                 }
 
-                                                val line = source.readUtf8Line() ?: break
-                                                if (line.isBlank()) continue
-                                                if (!line.startsWith("data:")) continue
+                                                val responseBody =
+                                                        resp.body
+                                                                ?: return@withContext Result.failure(
+                                                                        IOException("Empty response body")
+                                                                )
+                                                val source = responseBody.source()
 
-                                                val data = line.removePrefix("data:").trim()
-                                                if (data == "[DONE]") break
+                                                while (!source.exhausted()) {
+                                                        if (shouldStop?.invoke() == true) {
+                                                                call.cancel()
+                                                                break
+                                                        }
 
-                                                val obj =
-                                                        runCatching {
-                                                                        JsonParser.parseString(data).asJsonObject
+                                                        val line = source.readUtf8Line() ?: break
+                                                        if (line.isBlank()) continue
+                                                        if (!line.startsWith("data:")) continue
+
+                                                        val data = line.removePrefix("data:").trim()
+                                                        if (data == "[DONE]") break
+
+                                                        val obj =
+                                                                runCatching {
+                                                                                JsonParser.parseString(data).asJsonObject
+                                                                        }
+                                                                        .getOrNull() ?: continue
+
+                                                        val choices = obj.getAsJsonArray("choices") ?: continue
+                                                        if (choices.size() == 0) continue
+                                                        val choice0 = choices[0].asJsonObject
+
+                                                        val deltaEl = choice0.get("delta")
+                                                        val delta =
+                                                                if (deltaEl != null && deltaEl.isJsonObject)
+                                                                        deltaEl.asJsonObject
+                                                                else null
+
+                                                        if (delta != null) {
+                                                                val reasoningEl =
+                                                                        delta.get("reasoning_content")
+                                                                                ?: delta.get("reasoning")
+                                                                val contentEl = delta.get("content")
+                                                                val reasoning =
+                                                                        if (reasoningEl != null &&
+                                                                                        !reasoningEl.isJsonNull
+                                                                        ) reasoningEl.asString else null
+                                                                val content =
+                                                                        if (contentEl != null &&
+                                                                                        !contentEl.isJsonNull
+                                                                        ) contentEl.asString else null
+
+                                                                if (!reasoning.isNullOrEmpty())
+                                                                        onReasoningDelta(reasoning)
+                                                                if (!content.isNullOrEmpty())
+                                                                        onContentDelta(content)
+                                                                if (!reasoning.isNullOrEmpty() ||
+                                                                                !content.isNullOrEmpty()
+                                                                ) {
+                                                                        receivedAnyDelta = true
                                                                 }
-                                                                .getOrNull() ?: continue
-
-                                                val choices = obj.getAsJsonArray("choices") ?: continue
-                                                if (choices.size() == 0) continue
-                                                val choice0 = choices[0].asJsonObject
-
-                                                val deltaEl = choice0.get("delta")
-                                                val delta = if (deltaEl != null && deltaEl.isJsonObject) deltaEl.asJsonObject else null
-                                                if (delta != null) {
-                                                        val reasoningEl =
-                                                                delta.get("reasoning_content")
-                                                                        ?: delta.get("reasoning")
-                                                        val contentEl = delta.get("content")
-                                                        val reasoning =
-                                                                if (reasoningEl != null && !reasoningEl.isJsonNull)
-                                                                        reasoningEl.asString
-                                                                else null
-                                                        val content =
-                                                                if (contentEl != null && !contentEl.isJsonNull)
-                                                                        contentEl.asString
-                                                                else null
-
-                                                        if (!reasoning.isNullOrEmpty()) onReasoningDelta(reasoning)
-                                                        if (!content.isNullOrEmpty()) onContentDelta(content)
-
-                                                        if (!reasoning.isNullOrEmpty() || !content.isNullOrEmpty()) {
-                                                                receivedAnyDelta = true
-                                                        }
-                                                } else {
-                                                        val messageEl = choice0.get("message")
-                                                        val message =
-                                                                if (messageEl != null && messageEl.isJsonObject)
-                                                                        messageEl.asJsonObject
-                                                                else null
-                                                        val contentEl = message?.get("content")
-                                                        val content =
-                                                                if (contentEl != null && !contentEl.isJsonNull)
-                                                                        contentEl.asString
-                                                                else null
-                                                        if (!content.isNullOrEmpty()) onContentDelta(content)
-
-                                                        if (!content.isNullOrEmpty()) {
-                                                                receivedAnyDelta = true
+                                                        } else {
+                                                                val messageEl = choice0.get("message")
+                                                                val message =
+                                                                        if (messageEl != null && messageEl.isJsonObject)
+                                                                                messageEl.asJsonObject
+                                                                        else null
+                                                                val contentEl = message?.get("content")
+                                                                val content =
+                                                                        if (contentEl != null &&
+                                                                                        !contentEl.isJsonNull
+                                                                        ) contentEl.asString else null
+                                                                if (!content.isNullOrEmpty())
+                                                                        onContentDelta(content)
+                                                                if (!content.isNullOrEmpty()) {
+                                                                        receivedAnyDelta = true
+                                                                }
                                                         }
                                                 }
                                         }
+                                } finally {
+                                        activeStreamCall.compareAndSet(call, null)
                                 }
 
                                 if (!receivedAnyDelta) {
@@ -369,29 +387,95 @@ object AutoGlmClient {
                 baseUrl: String = DEFAULT_BASE_URL,
                 model: String = DEFAULT_MODEL,
         ): Boolean =
-                runCatching {
-                                val normalizedApiKey = normalizeApiKey(apiKey)
-                                val res =
-                                        getService(baseUrl).chat(
-                                                auth = "Bearer $normalizedApiKey",
-                                                request =
+                withContext(Dispatchers.IO) {
+                        runCatching {
+                                        val normalizedApiKey = normalizeApiKey(apiKey)
+                                        val requestBodyJson =
+                                                Gson().toJson(
                                                         ChatRequest(
                                                                 model = resolveModel(model),
                                                                 messages =
                                                                         listOf(
                                                                                 ChatRequestMessage(
-                                                                                        role =
-                                                                                                "user",
-                                                                                        content =
-                                                                                                "ping"
+                                                                                        role = "user",
+                                                                                        content = "请仅回复：xyla"
                                                                                 )
                                                                         ),
-                                                                stream = false
+                                                                stream = false,
+                                                                max_tokens = 32,
                                                         )
-                                        )
-                                !res.choices.isNullOrEmpty()
-                        }
-                        .getOrDefault(false)
+                                                )
+                                        val request =
+                                                Request.Builder()
+                                                        .url(normalizeBaseUrl(baseUrl) + "chat/completions")
+                                                        .addHeader("Authorization", "Bearer $normalizedApiKey")
+                                                        .addHeader("Content-Type", "application/json")
+                                                        .post(
+                                                                requestBodyJson.toRequestBody(
+                                                                        "application/json; charset=utf-8"
+                                                                                .toMediaType()
+                                                                )
+                                                        )
+                                                        .build()
+
+                                        SharedHttpClient.fastInstance.newCall(request).execute().use { response ->
+                                                if (!response.isSuccessful) {
+                                                        return@use false
+                                                }
+                                                val body = response.body?.string().orEmpty()
+                                                if (body.isBlank()) return@use false
+                                                isApiCheckResponseContainsExpectedReply(body)
+                                        }
+                                }
+                                .getOrDefault(false)
+                }
+
+        private fun isApiCheckResponseContainsExpectedReply(body: String): Boolean {
+                val root = runCatching { JsonParser.parseString(body) }.getOrNull() ?: return false
+                if (!root.isJsonObject) return false
+
+                val obj = root.asJsonObject
+                if (obj.has("error") && !obj.get("error").isJsonNull) return false
+
+                val choices = obj.getAsJsonArray("choices") ?: return false
+                if (choices.size() == 0) return false
+                val choice0 = choices[0].asJsonObject
+                val message = choice0.getAsJsonObject("message") ?: return false
+                val contentEl = message.get("content") ?: return false
+
+                val contentText = extractMessageContentText(contentEl)
+                if (contentText.isNullOrBlank()) return false
+                return contentText.contains(API_CHECK_EXPECTED_REPLY, ignoreCase = true)
+        }
+
+        private fun extractMessageContentText(contentEl: com.google.gson.JsonElement): String? {
+                if (contentEl.isJsonNull) return null
+                if (contentEl.isJsonPrimitive) {
+                        return runCatching { contentEl.asString }.getOrNull()
+                }
+                if (contentEl.isJsonArray) {
+                        val parts =
+                                contentEl.asJsonArray.mapNotNull { part ->
+                                        when {
+                                                part == null || part.isJsonNull -> null
+                                                part.isJsonPrimitive ->
+                                                        runCatching { part.asString }.getOrNull()
+                                                part.isJsonObject -> {
+                                                        val obj = part.asJsonObject
+                                                        val textEl = obj.get("text")
+                                                        if (textEl != null && !textEl.isJsonNull) {
+                                                                runCatching { textEl.asString }.getOrNull()
+                                                        } else {
+                                                                null
+                                                        }
+                                                }
+                                                else -> null
+                                        }
+                                }
+                        return if (parts.isEmpty()) null else parts.joinToString("\n")
+                }
+                return null
+        }
 
         suspend fun sendChat(
                 apiKey: String,
@@ -424,7 +508,7 @@ object AutoGlmClient {
                 maxTokens: Int? = DEFAULT_MAX_TOKENS,
                 topP: Float? = DEFAULT_TOP_P,
                 frequencyPenalty: Float? = DEFAULT_FREQUENCY_PENALTY,
-                /** 自动化场景可启用更短超时，避免长卡住 */
+                /** 自动化场景可启用更短超时，避免长时间卡住 */
                 useFastTimeouts: Boolean = false,
         ): Result<String> {
                 return try {
@@ -466,3 +550,5 @@ interface AutoGlmService {
                 @Body request: ChatRequest
         ): ChatResponse
 }
+
+

@@ -8,6 +8,7 @@ import com.ai.phoneagent.helper.AttachmentManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * ChatViewModel
@@ -121,32 +122,85 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return attachmentManager
     }
     
+    private fun buildAttachmentAwareText(
+        userMessage: String,
+        nonImageAttachments: List<AttachmentInfo>
+    ): String {
+        val messageBuilder = StringBuilder(userMessage.trim())
+        nonImageAttachments.forEachIndexed { index, attachment ->
+            if (messageBuilder.isNotEmpty()) {
+                messageBuilder.append("\n\n")
+            }
+            messageBuilder.append("附件").append(index + 1).append("：")
+            messageBuilder.append(attachment.fileName.ifBlank { "未命名文件" })
+            messageBuilder.append("（").append(attachment.mimeType).append("，")
+            messageBuilder.append(attachment.fileSize).append("字节）")
+            if (attachment.content.isNotBlank()) {
+                messageBuilder.append("\n附件内容：\n")
+                messageBuilder.append(attachment.content.trim())
+            }
+        }
+        return messageBuilder.toString().trim()
+    }
+
+    private fun isImageAttachment(attachment: AttachmentInfo): Boolean {
+        if (attachment.mimeType.startsWith("image/", ignoreCase = true)) return true
+        val extension =
+            attachment.fileName.substringAfterLast('.', "").ifBlank {
+                attachment.filePath.substringAfterLast('.', "")
+            }.lowercase()
+        return extension in setOf("jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp")
+    }
+
+    private fun resolveImageMimeType(attachment: AttachmentInfo): String {
+        if (attachment.mimeType.startsWith("image/", ignoreCase = true)) {
+            return attachment.mimeType
+        }
+        return when (
+            attachment.fileName.substringAfterLast('.', "").ifBlank {
+                attachment.filePath.substringAfterLast('.', "")
+            }.lowercase()
+        ) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "heic", "heif" -> "image/heic"
+            "bmp" -> "image/bmp"
+            else -> "image/jpeg"
+        }
+    }
+
     /**
      * 构建包含附件的完整消息（多模态格式）
-     * 
-     * 对于多模态模型，返回包含文本和图片的内容数组
-     * 对于普通模型，返回文本格式的附件引用
+     *
+     * 对于图片附件，返回 OpenAI 兼容 content 数组；
+     * 对于文本/文件附件，直接拼入可读文本内容传给模型。
      */
-    fun buildMessageWithAttachments(userMessage: String): Any {
-        val currentAttachments = attachments.value
+    fun buildMessageWithAttachments(
+        userMessage: String,
+        sourceAttachments: List<AttachmentInfo>? = null
+    ): Any {
+        val currentAttachments = sourceAttachments ?: attachments.value
         if (currentAttachments.isEmpty()) {
             return userMessage
         }
         
         // 检查是否有图片附件
-        val imageAttachments = currentAttachments.filter { 
-            it.mimeType.startsWith("image/") 
-        }
+        val imageAttachments = currentAttachments.filter { isImageAttachment(it) }
         
+        val nonImageAttachments = currentAttachments.filterNot { isImageAttachment(it) }
+        val textPayload = buildAttachmentAwareText(userMessage, nonImageAttachments)
+
         if (imageAttachments.isNotEmpty()) {
             // 构建多模态内容数组（OpenAI格式）
             val contentArray = mutableListOf<Map<String, Any>>()
-            
+             
             // 添加文本内容
-            if (userMessage.isNotBlank()) {
+            if (textPayload.isNotBlank()) {
                 contentArray.add(mapOf(
                     "type" to "text",
-                    "text" to userMessage
+                    "text" to textPayload
                 ))
             }
             
@@ -155,26 +209,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // 读取图片并转换为base64
                 val imageData = readImageAsBase64(attachment.filePath)
                 if (imageData != null) {
+                    val imageMimeType = resolveImageMimeType(attachment)
                     contentArray.add(mapOf(
                         "type" to "image_url",
                         "image_url" to mapOf(
-                            "url" to "data:${attachment.mimeType};base64,$imageData"
+                            "url" to "data:${imageMimeType};base64,$imageData"
                         )
                     ))
                 }
             }
-            
+             
             return contentArray
         }
-        
-        // 如果没有图片，使用文本格式的附件引用
-        val messageBuilder = StringBuilder(userMessage)
-        currentAttachments.forEach { attachment ->
-            messageBuilder.append("\n\n")
-            messageBuilder.append(createAttachmentReference(attachment))
-        }
-        
-        return messageBuilder.toString()
+
+        return textPayload
     }
     
     /**
@@ -183,10 +231,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun readImageAsBase64(filePath: String): String? {
         return try {
             val context = getApplication<Application>()
-            val uri = android.net.Uri.parse(filePath)
-            val inputStream = context.contentResolver.openInputStream(uri)
-            val bytes = inputStream?.readBytes()
-            inputStream?.close()
+            val inputStream =
+                when {
+                    filePath.startsWith("content://") || filePath.startsWith("file://") -> {
+                        val uri = android.net.Uri.parse(filePath)
+                        context.contentResolver.openInputStream(uri)
+                    }
+                    else -> {
+                        val file = File(filePath)
+                        if (file.exists() && file.isFile) file.inputStream() else null
+                    }
+                }
+            val bytes = inputStream?.use { it.readBytes() }
             bytes?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) }
         } catch (e: Exception) {
             e.printStackTrace()

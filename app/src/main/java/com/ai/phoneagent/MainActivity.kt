@@ -15,6 +15,30 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+
+//                            _ooOoo_  
+//                           o8888888o  
+//                           88" . "88  
+//                           (| -_- |)  
+//                            O\ = /O  
+//                        ____/`---'\____  
+//                      .   ' \\| |// `.  
+//                       / \\||| : |||// \  
+//                     / _||||| -:- |||||- \  
+//                       | | \\\ - /// | |  
+//                     | \_| ''\---/'' | |  
+//                      \ .-\__ `-` ___/-. /  
+//                   ___`. .' /--.--\ `. . __  
+//                ."" '< `.___\_<|>_/___.' >'"".  
+//               | | : `- \`.;`\ _ /`;.`/ - ` : | |  
+//                 \ \ `-. \_ __\ /__ _/ .-` / /  
+//         ======`-.____`-.___\_____/___.-`____.-'======  
+//                            `=---='  
+//  
+//         .............................................  
+//                  佛祖保佑             永无BUG 
+
+
 package com.ai.phoneagent
 
 import android.Manifest
@@ -26,11 +50,14 @@ import android.content.Context
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import java.io.File
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Matrix
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -39,6 +66,7 @@ import android.graphics.SweepGradient
 import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.util.Base64
+import android.util.LruCache
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -107,6 +135,18 @@ import android.text.Html
 import com.google.android.material.materialswitch.MaterialSwitch
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.ScreenshotMonitor
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import com.ai.phoneagent.core.automation.ActivityAutomationInstructionGateway
 import com.ai.phoneagent.core.automation.AutomationLogBridge
 import com.ai.phoneagent.ui.inputbar.InputState
@@ -116,15 +156,26 @@ import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.colorResource
+import androidx.compose.ui.res.dimensionResource
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.livedata.observeAsState
+import com.ai.phoneagent.data.AttachmentInfo
 import com.ai.phoneagent.viewmodel.ChatViewModel
+import java.io.InputStream
 
 class MainActivity : AppCompatActivity() {
     
@@ -140,6 +191,8 @@ class MainActivity : AppCompatActivity() {
             val author: String,
             val content: String,
             val isUser: Boolean,
+            val thinkingDurationMs: Long? = null,
+            val attachments: List<AttachmentInfo>? = null,
     )
 
     private data class Conversation(
@@ -252,6 +305,7 @@ class MainActivity : AppCompatActivity() {
     
     // 附件预览状态（由 ViewModel 管理，UI 层仅负责显示）
     private var attachmentPreviewView: View? = null
+    private val attachmentThumbnailCache = LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(64)
 
     @Volatile private var suppressApiInputWatcher: Boolean = false
     @Volatile private var apiNeedsRecheckToastShown: Boolean = false
@@ -1507,12 +1561,6 @@ class MainActivity : AppCompatActivity() {
         apiThirdPartySwitch.setOnCheckedChangeListener { _, checked ->
             apiThirdPartyContainer.visibility = if (checked) View.VISIBLE else View.GONE
             prefs.edit().putBoolean(apiUseThirdPartyPref, checked).apply()
-            prefs.edit()
-                    .remove(apiLastCheckSigPref)
-                    .remove(apiLastCheckKeyPref)
-                    .remove(apiLastCheckOkPref)
-                    .remove(apiLastCheckTimePref)
-                    .apply()
             apiNeedsRecheckToastShown = false
             onApiConfigPotentiallyChanged(showNeedsCheckMessage = checked)
         }
@@ -1563,6 +1611,9 @@ class MainActivity : AppCompatActivity() {
         )
         binding.navigationView.itemTextColor =
                 ColorStateList.valueOf(ContextCompat.getColor(this, R.color.m3t_on_surface))
+        val isNightMode =
+                (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                        Configuration.UI_MODE_NIGHT_YES
         
         binding.drawerLayout.addDrawerListener(
                 object : DrawerLayout.SimpleDrawerListener() {
@@ -1590,7 +1641,7 @@ class MainActivity : AppCompatActivity() {
                         binding.contentRoot.scaleY = scale
                         
                         // 2. 透明度：主界面轻微变暗
-                        binding.contentRoot.alpha = 1f - (t * 0.3f)
+                        binding.contentRoot.alpha = if (isNightMode) 1f else 1f - (t * 0.3f)
                         
                         // 3. 位移补偿：侧边栏推开主界面的同时，保持平滑平移
                         binding.contentRoot.translationX = w * t
@@ -1607,7 +1658,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         
                         // 5. 侧边栏本身也平滑淡入
-                        drawerView.alpha = 0.5f + (0.5f * t)
+                        drawerView.alpha = if (isNightMode) 1f else 0.5f + (0.5f * t)
                     }
 
                     override fun onDrawerClosed(drawerView: View) {
@@ -1721,11 +1772,7 @@ class MainActivity : AppCompatActivity() {
 
         btnCheck.setOnClickListener {
             vibrateLight()
-            val textRaw = apiInput.text.toString()
-            val tagKey = (apiInput.tag as? String).orEmpty()
-            val key =
-                    (if (textRaw.contains("*") && textRaw == maskKey(tagKey)) tagKey else textRaw)
-                            .trim()
+            val key = resolveApiKeyFromInput()
 
             if (key.isBlank()) {
 
@@ -1742,17 +1789,24 @@ class MainActivity : AppCompatActivity() {
             apiInput.setSelection(apiInput.text?.length ?: 0)
             suppressApiInputWatcher = false
 
-            if (apiThirdPartySwitch.isChecked) {
-                prefs.edit().putString(apiThirdPartyBaseUrlPref, apiBaseUrlInput.text.toString().trim()).apply()
-                prefs.edit().putString(apiThirdPartyModelPref, apiModelInput.text.toString().trim()).apply()
+            val useThirdParty = apiThirdPartySwitch.isChecked
+            val baseUrlSnapshot = resolveApiBaseUrl()
+            val modelSnapshot = resolveApiModel()
+            if (useThirdParty) {
+                // 检查前先固化第三方配置，避免开关切换后读到不一致的临时状态
+                prefs.edit()
+                        .putString(apiThirdPartyBaseUrlPref, baseUrlSnapshot)
+                        .putString(apiThirdPartyModelPref, modelSnapshot)
+                        .apply()
             }
 
             apiNeedsRecheckToastShown = false
 
             startApiCheck(
                     key = key,
-                    baseUrl = resolveApiBaseUrl(),
-                    model = resolveApiModel(),
+                    baseUrl = baseUrlSnapshot,
+                    model = modelSnapshot,
+                    useThirdParty = useThirdParty,
                     force = true,
             )
         }
@@ -1850,6 +1904,7 @@ class MainActivity : AppCompatActivity() {
             key: String,
             baseUrl: String = AutoGlmClient.DEFAULT_BASE_URL,
             model: String = AutoGlmClient.DEFAULT_MODEL,
+            useThirdParty: Boolean = apiThirdPartySwitch.isChecked,
             force: Boolean,
     ) {
         val k = key.trim()
@@ -1902,7 +1957,15 @@ class MainActivity : AppCompatActivity() {
             remoteApiOk = ok
             apiStatus.text = if (ok) "API 可用" else "API 检查失败"
             prefs.edit()
-                    .putString(apiLastCheckSigPref, apiConfigSignature(k, normalizedBaseUrl, resolvedModel))
+                    .putString(
+                            apiLastCheckSigPref,
+                            apiConfigSignature(
+                                    apiKey = k,
+                                    baseUrl = normalizedBaseUrl,
+                                    model = resolvedModel,
+                                    useThirdParty = useThirdParty,
+                            ),
+                    )
                     .putString(apiLastCheckKeyPref, k)
                     .putBoolean(apiLastCheckOkPref, ok)
                     .putLong(apiLastCheckTimePref, System.currentTimeMillis())
@@ -1913,6 +1976,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onApiConfigChanged(clearApiValue: Boolean = false, showNeedsCheckMessage: Boolean = true) {
         if (clearApiValue) {
+            apiCheckSeq++
             remoteApiOk = null
             remoteApiChecking = false
             lastCheckedApiKey = ""
@@ -1929,6 +1993,7 @@ class MainActivity : AppCompatActivity() {
 
         val currentKey = prefs.getString("api_key", "").orEmpty()
         if (currentKey.isBlank()) {
+            apiCheckSeq++
             remoteApiOk = null
             remoteApiChecking = false
             lastCheckedApiKey = ""
@@ -1943,12 +2008,26 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        prefs.edit()
-                .remove(apiLastCheckSigPref)
-                .remove(apiLastCheckKeyPref)
-                .remove(apiLastCheckOkPref)
-                .remove(apiLastCheckTimePref)
-                .apply()
+        val currentSig =
+                apiConfigSignature(
+                        apiKey = currentKey,
+                        baseUrl = resolveApiBaseUrl(),
+                        model = resolveApiModel(),
+                        useThirdParty = apiThirdPartySwitch.isChecked,
+                )
+        val lastSig = prefs.getString(apiLastCheckSigPref, "").orEmpty()
+        val hasLast = prefs.contains(apiLastCheckOkPref)
+        if (hasLast && lastSig.isNotBlank() && lastSig == currentSig) {
+            val ok = prefs.getBoolean(apiLastCheckOkPref, false)
+            remoteApiOk = ok
+            remoteApiChecking = false
+            lastCheckedApiKey = currentKey
+            apiStatus.text = if (ok) "API 可用" else "API 检查失败"
+            updateStatusText()
+            return
+        }
+
+        apiCheckSeq++
         remoteApiOk = null
         remoteApiChecking = false
         lastCheckedApiKey = ""
@@ -2004,15 +2083,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resolveApiModel(): String {
-        if (!apiThirdPartySwitch.isChecked) return "glm-4.6v-flash"
-        return apiModelInput.text?.toString()?.trim().orEmpty().ifBlank { "glm-4.6v-flash" }
+        if (!apiThirdPartySwitch.isChecked) return AutoGlmClient.DEFAULT_MODEL
+        return apiModelInput.text?.toString()?.trim().orEmpty().ifBlank { AutoGlmClient.DEFAULT_MODEL }
     }
 
-    private fun apiConfigSignature(apiKey: String, baseUrl: String, model: String): String {
+    private fun apiConfigSignature(
+            apiKey: String,
+            baseUrl: String,
+            model: String,
+            useThirdParty: Boolean = apiThirdPartySwitch.isChecked,
+    ): String {
         val normalizedBaseUrl = baseUrl.ifBlank { AutoGlmClient.DEFAULT_BASE_URL }
         val normalizedModel = model.ifBlank { AutoGlmClient.DEFAULT_MODEL }
-        val useThirdParty = apiThirdPartySwitch.isChecked
         return "${if (useThirdParty) "1" else "0"}|${apiKey.trim()}|$normalizedBaseUrl|$normalizedModel"
+    }
+
+    private fun resolveApiKeyFromInput(): String {
+        val displayed = apiInput.text?.toString().orEmpty()
+        val tagKey = (apiInput.tag as? String).orEmpty().trim()
+        val savedKey = prefs.getString("api_key", "").orEmpty().trim()
+
+        val resolved =
+                when {
+                    tagKey.isNotBlank() && displayed == maskKey(tagKey) -> tagKey
+                    savedKey.isNotBlank() && displayed == maskKey(savedKey) -> savedKey
+                    displayed.contains("*") && savedKey.isNotBlank() -> savedKey
+                    else -> displayed
+                }
+        return resolved.trim()
     }
 
     private fun updateStatusText() {
@@ -2151,6 +2249,14 @@ class MainActivity : AppCompatActivity() {
                         onTextChange = { inputTextState.value = it },
                         onSend = {
                             vibrateLight()
+                            if (state is InputState.Generating) {
+                                if (!shouldStopGeneration) {
+                                    shouldStopGeneration = true
+                                    runCatching { AutoGlmClient.cancelActiveStream() }
+                                    Toast.makeText(this@MainActivity, "已请求终止生成", Toast.LENGTH_SHORT).show()
+                                }
+                                return@InputBar
+                            }
                             val t = inputTextState.value.trim()
                             if (t.isNotBlank() || chatViewModel.attachments.value.isNotEmpty()) {
                                 hideKeyboard()
@@ -2176,9 +2282,7 @@ class MainActivity : AppCompatActivity() {
                                         ).show()
                                     }
                                 } else {
-                                    // 构建包含附件的完整消息
-                                    val messageWithAttachments = chatViewModel.buildMessageWithAttachments(t)
-                                    sendMessage(messageWithAttachments)
+                                    sendMessage(t)
                                     inputTextState.value = ""
                                     chatViewModel.clearAttachments()
                                 }
@@ -2415,14 +2519,19 @@ class MainActivity : AppCompatActivity() {
                     m.author,
                     m.content,
                     animate = false,
-                    timeCostMs = 0,
+                    timeCostMs = m.thinkingDurationMs ?: 0L,
                     retryUserText = lastUserContent,
                     messageIndexInConversation = index,
                     modelName = currentModel
                 )
             } else {
                 lastUserContent = m.content
-                appendComplexUserMessage(m.author, m.content, animate = false)
+                appendComplexUserMessage(
+                    m.author,
+                    m.content,
+                    animate = false,
+                    attachments = m.attachments.orEmpty()
+                )
             }
         }
         
@@ -2523,30 +2632,44 @@ class MainActivity : AppCompatActivity() {
         
         // 使用 ViewModel 处理附件，构建完整消息内容
         lifecycleScope.launch {
-            val messageContent = if (resendUser) {
-                content
-            } else {
-                content
-            }
-            
-            // 将消息内容转换为字符串用于显示
-            val messageContentStr = when (messageContent) {
-                is String -> messageContent
+            val baseUserText = when (content) {
+                is String -> content
                 is List<*> -> {
-                    // 提取所有文本部分
-                    messageContent.filterIsInstance<Map<*, *>>()
+                    content.filterIsInstance<Map<*, *>>()
                         .filter { it["type"] == "text" }
                         .joinToString("\n") { it["text"] as? String ?: "" }
                 }
-                else -> messageContent.toString()
+                else -> content.toString()
             }
+            val userAttachments = if (resendUser) chatViewModel.attachments.value.toList() else emptyList()
+            val messageContent: Any =
+                if (resendUser && userAttachments.isNotEmpty()) {
+                    chatViewModel.buildMessageWithAttachments(baseUserText, userAttachments)
+                } else {
+                    content
+                }
+
+            // 用户消息展示保持纯文本，附件通过图标展示
+            val messageContentStr = baseUserText
             
             if (resendUser) {
-                c.messages.add(UiMessage(author = "我", content = messageContentStr, isUser = true))
+                c.messages.add(
+                    UiMessage(
+                        author = "我",
+                        content = messageContentStr,
+                        isUser = true,
+                        attachments = userAttachments.takeIf { it.isNotEmpty() }
+                    )
+                )
                 c.updatedAt = System.currentTimeMillis()
                 persistConversations()
 
-                appendComplexUserMessage("我", messageContentStr, animate = true)
+                appendComplexUserMessage(
+                    "我",
+                    messageContentStr,
+                    animate = true,
+                    attachments = userAttachments
+                )
                 
                 // 同步消息到悬浮窗（如果运行中）
                 if (FloatingChatService.isRunning()) {
@@ -2580,6 +2703,13 @@ class MainActivity : AppCompatActivity() {
                 binding.messagesContainer.addView(aiView)
                 val vh = StreamRenderHelper.bindViews(aiView)
                 StreamRenderHelper.initThinkingState(vh)
+                val tvModelName = aiView.findViewById<TextView>(R.id.tv_model_name)
+                if (resolvedModel.isNotBlank()) {
+                    tvModelName.text = resolvedModel
+                    tvModelName.visibility = View.VISIBLE
+                } else {
+                    tvModelName.visibility = View.GONE
+                }
 
                 // 按钮事件绑定
                 val retryPrompt = textForTitle
@@ -2614,7 +2744,16 @@ class MainActivity : AppCompatActivity() {
 
                 // 构建对话历史
                 val chatHistory = buildChatHistory(c, retryMode).toMutableList()
-                if (!resendUser) {
+                if (resendUser) {
+                    val latestUserIndex = chatHistory.indexOfLast { it.role == "user" }
+                    if (latestUserIndex >= 0) {
+                        // Preserve multimodal payload (e.g. image_url list) for the current turn.
+                        chatHistory[latestUserIndex] =
+                            ChatRequestMessage(role = "user", content = messageContent)
+                    } else {
+                        chatHistory.add(ChatRequestMessage(role = "user", content = messageContent))
+                    }
+                } else {
                     val targetIndex = chatHistory.indexOfLast { it.role == "user" }
                     if (targetIndex >= 0) {
                         while (chatHistory.size > targetIndex + 1) {
@@ -2714,8 +2853,13 @@ class MainActivity : AppCompatActivity() {
                                             }
                                         }
                                     },
+                                    shouldStop = { shouldStopGeneration },
                             )
 
+                    if (shouldStopGeneration) {
+                        streamOk = true
+                        break
+                    }
                     if (result.isSuccess) {
                         streamOk = true
                         break
@@ -2725,7 +2869,8 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 // 处理结果
-                val timeCost = (System.currentTimeMillis() - startTime) / 1000
+                val timeCostMs = System.currentTimeMillis() - startTime
+                val timeCost = timeCostMs / 1000
 
                 val finalContent =
                         if (shouldStopGeneration) {
@@ -2759,7 +2904,17 @@ class MainActivity : AppCompatActivity() {
 
                 // 保存到历史 - 使用解析后的内容
                 val thinkingContent = StreamRenderHelper.getThinkingText(vh)
-                val answerContentRaw = StreamRenderHelper.getAnswerText(vh)
+                val renderedAnswerRaw = StreamRenderHelper.getAnswerText(vh).trim()
+                val parsedFinalAnswer = parseStoredAiContent(finalContent).second.trim()
+                val fallbackAnswerRaw =
+                    parsedFinalAnswer.ifBlank { stripAutomationMarker(finalContent).trim() }
+                val answerContentRaw =
+                    if (renderedAnswerRaw.isNotBlank()) renderedAnswerRaw else fallbackAnswerRaw
+                if (renderedAnswerRaw.isBlank() && answerContentRaw.isNotBlank() && streamOk && !shouldStopGeneration) {
+                    runOnUiThread {
+                        StreamRenderHelper.applyMarkdownToHistory(vh.messageContent, answerContentRaw)
+                    }
+                }
                 val (answerContent, markerInAnswer) =
                         extractAutomationInstruction(answerContentRaw)
                 val automationInstruction =
@@ -2781,7 +2936,14 @@ class MainActivity : AppCompatActivity() {
                         }
 
                 val cc = requireActiveConversation()
-                cc.messages.add(UiMessage(author = "Aries AI", content = persistContent, isUser = false))
+                cc.messages.add(
+                    UiMessage(
+                        author = "Aries AI",
+                        content = persistContent,
+                        isUser = false,
+                        thinkingDurationMs = timeCostMs
+                    )
+                )
                 cc.updatedAt = System.currentTimeMillis()
                 persistConversations()
 
@@ -3494,31 +3656,18 @@ class MainActivity : AppCompatActivity() {
                 你是 Aries AI。
                 你具备手机自动化相关能力：当任务适合自动化时，你需要给出“可转交执行”的自动化指令；
                 真正执行由系统在用户确认后完成，而不是由你直接执行。
-                
-                你必须严格按以下结构输出（否则我的 Android 应用无法正确渲染）：
-                
-                【思考开始】
-                （这里写你的思考过程）
-                【思考结束】
-                
-                【回答开始】
-                （这里写你的最终回答，使用 Markdown：标题/列表/代码块/表格等）
-                【回答结束】
-                
+
                 要求：
-                1) 以上四个标记必须原样输出，且不要输出其它同名/相似标记。
-                2) 思考内容写在“思考开始/结束”之间；正式回答写在“回答开始/结束”之间。
-                3) 代码块使用三反引号 ``` 并尽量保持语法完整。
-                4) 如果你判断该请求适合转交手机自动化执行，请在“回答区域内”追加且仅追加一行：
+                1) 直接给出最终回答，使用 Markdown：标题/列表/代码块/表格等。
+                2) 代码块使用三反引号 ``` 并尽量保持语法完整。
+                3) 如果你判断该请求适合转交手机自动化执行，请在回复中追加且仅追加一行：
                    [[AUTO_EXECUTE:这里填写可直接执行的中文自动化指令]]
-                5) 自动化指令必须是自然语言任务描述（如“打开手机浏览器并访问 https://www.jd.com”），
+                4) 自动化指令必须是自然语言任务描述（如“打开手机浏览器并访问 https://www.jd.com”），
                    严禁输出 Selenium / JavaScript / Python / Node.js 代码。
-                6) 如果不需要自动化，不要输出 AUTO_EXECUTE 标记。
-                7) 自动化场景回答示例：
-                   【回答开始】
+                5) 如果不需要自动化，不要输出 AUTO_EXECUTE 标记。
+                6) 自动化场景回答示例：
                    我可以帮你执行这个手机操作。
                    [[AUTO_EXECUTE:打开手机浏览器并访问 https://www.jd.com]]
-                   【回答结束】
             """.trimIndent()
         ))
 
@@ -3538,7 +3687,7 @@ class MainActivity : AppCompatActivity() {
         // 添加对话历史（最多保留最近10轮对话，避免上下文过长）
         val recentMessages = conversation.messages.takeLast(20) // 10轮对话 = 20条消息
         for (msg in recentMessages) {
-            val content = if (!msg.isUser) {
+            val content: Any = if (!msg.isUser) {
                 // 历史记录传给模型前统一清洗旧分隔符，避免把乱码标记带入上下文。
                 val (thinking, answer) = parseStoredAiContent(msg.content)
                 if (!thinking.isNullOrBlank()) {
@@ -3546,6 +3695,11 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     answer
                 }
+            } else if (!msg.attachments.isNullOrEmpty()) {
+                chatViewModel.buildMessageWithAttachments(
+                    userMessage = msg.content,
+                    sourceAttachments = msg.attachments
+                )
             } else {
                 msg.content
             }
@@ -3632,7 +3786,7 @@ class MainActivity : AppCompatActivity() {
         
         // 设置模型名称（显示在作者名右侧）
         if (!modelName.isNullOrBlank()) {
-            tvModelName.text = "调用模型：$modelName"
+            tvModelName.text = modelName
             tvModelName.visibility = View.VISIBLE
         } else {
             tvModelName.visibility = View.GONE
@@ -3866,12 +4020,212 @@ class MainActivity : AppCompatActivity() {
     /**
      * 用户消息复杂气泡：淡水蓝背景，右侧对齐，并与底部输入栏左右边界保持一致。
      */
-    private fun appendComplexUserMessage(author: String, content: String, animate: Boolean) {
+    private fun resolveAttachmentIcon(attachment: AttachmentInfo): ImageVector =
+        when {
+            attachment.fileName.startsWith("camera_") -> Icons.Default.PhotoCamera
+            isImageAttachment(attachment) -> Icons.Default.Image
+            attachment.filePath.startsWith("screen_") -> Icons.Default.ScreenshotMonitor
+            attachment.mimeType.startsWith("audio/") -> Icons.Default.AudioFile
+            attachment.mimeType.startsWith("video/") -> Icons.Default.VideoLibrary
+            else -> Icons.Default.Description
+        }
+
+    private fun isImageAttachment(attachment: AttachmentInfo): Boolean {
+        if (attachment.mimeType.startsWith("image/", ignoreCase = true)) return true
+        val extension =
+            attachment.fileName.substringAfterLast('.', "").ifBlank {
+                attachment.filePath.substringAfterLast('.', "")
+            }.lowercase()
+        return extension in setOf("jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp")
+    }
+
+    private fun openAttachmentInputStream(filePath: String): InputStream? {
+        return runCatching {
+            when {
+                filePath.startsWith("content://") || filePath.startsWith("file://") -> {
+                    contentResolver.openInputStream(Uri.parse(filePath))
+                }
+                else -> {
+                    val file = File(filePath)
+                    if (file.exists() && file.isFile) file.inputStream() else null
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqSizePx: Int): Int {
+        val outHeight = options.outHeight
+        val outWidth = options.outWidth
+        var inSampleSize = 1
+        if (outHeight > reqSizePx || outWidth > reqSizePx) {
+            var halfHeight = outHeight / 2
+            var halfWidth = outWidth / 2
+            while ((halfHeight / inSampleSize) >= reqSizePx && (halfWidth / inSampleSize) >= reqSizePx) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize.coerceAtLeast(1)
+    }
+
+    private fun decodeAttachmentThumbnail(filePath: String, reqSizePx: Int): Bitmap? {
+        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        openAttachmentInputStream(filePath)?.use { input ->
+            BitmapFactory.decodeStream(input, null, boundsOptions)
+        } ?: return null
+
+        if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
+
+        val decodeOptions =
+            BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(boundsOptions, reqSizePx)
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+        return openAttachmentInputStream(filePath)?.use { input ->
+            BitmapFactory.decodeStream(input, null, decodeOptions)
+        }
+    }
+
+    private fun bindUserAttachmentIcons(composeView: ComposeView, attachments: List<AttachmentInfo>) {
+        if (attachments.isEmpty()) {
+            composeView.visibility = View.GONE
+            composeView.setContent {}
+            return
+        }
+
+        composeView.visibility = View.VISIBLE
+        composeView.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+        composeView.setContent {
+            val density = LocalDensity.current
+            val itemBg = colorResource(id = R.color.m3t_attachment_preview_card_bg)
+            val iconBg = colorResource(id = R.color.m3t_attachment_option_bg)
+            val iconTint = colorResource(id = R.color.m3t_attachment_option_icon)
+            val textColor = colorResource(id = R.color.m3t_attachment_preview_name)
+
+            val itemSpacing = dimensionResource(id = R.dimen.m3t_user_attachment_chip_spacing)
+            val itemRadius = dimensionResource(id = R.dimen.m3t_user_attachment_chip_radius)
+            val itemPaddingH = dimensionResource(id = R.dimen.m3t_spacing_sm)
+            val itemPaddingV = dimensionResource(id = R.dimen.m3t_spacing_xs)
+            val thumbSize = dimensionResource(id = R.dimen.m3t_user_attachment_thumb_size)
+            val iconBoxSize = dimensionResource(id = R.dimen.m3t_user_attachment_chip_size)
+            val iconSize = dimensionResource(id = R.dimen.m3t_user_attachment_chip_icon_size)
+            val titleMaxWidth = dimensionResource(id = R.dimen.m3t_user_attachment_name_max_width)
+
+            Column(verticalArrangement = Arrangement.spacedBy(itemSpacing)) {
+                attachments.forEach { attachment ->
+                    val isImage = isImageAttachment(attachment)
+                    val previewSizePx = with(density) { thumbSize.roundToPx() }.coerceAtLeast(1)
+                    val previewBitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+                        initialValue = null,
+                        key1 = attachment.filePath,
+                        key2 = previewSizePx,
+                        key3 = isImage
+                    ) {
+                        if (!isImage) {
+                            value = null
+                            return@produceState
+                        }
+
+                        val cacheKey = "${attachment.filePath}#$previewSizePx"
+                        val cachedBitmap = attachmentThumbnailCache.get(cacheKey)
+                        if (cachedBitmap != null) {
+                            value = cachedBitmap
+                            return@produceState
+                        }
+
+                        val decodedBitmap =
+                            withContext(Dispatchers.IO) {
+                                decodeAttachmentThumbnail(attachment.filePath, previewSizePx)?.asImageBitmap()
+                            }
+                        if (decodedBitmap != null) {
+                            attachmentThumbnailCache.put(cacheKey, decodedBitmap)
+                        }
+                        value = decodedBitmap
+                    }
+                    val shouldRenderImageStyle = isImage || previewBitmap != null
+
+                    Row(
+                        modifier =
+                            Modifier
+                                .clip(RoundedCornerShape(itemRadius))
+                                .background(itemBg)
+                                .padding(horizontal = itemPaddingH, vertical = itemPaddingV),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(itemSpacing)
+                    ) {
+                        if (shouldRenderImageStyle) {
+                            if (previewBitmap != null) {
+                                Image(
+                                    bitmap = previewBitmap!!,
+                                    contentDescription = attachment.fileName,
+                                    contentScale = ContentScale.Crop,
+                                    modifier =
+                                        Modifier
+                                            .size(thumbSize)
+                                            .clip(RoundedCornerShape(itemRadius))
+                                )
+                            } else {
+                                Box(
+                                    modifier =
+                                        Modifier
+                                            .size(thumbSize)
+                                            .clip(RoundedCornerShape(itemRadius))
+                                            .background(iconBg),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = resolveAttachmentIcon(attachment),
+                                        contentDescription = attachment.fileName,
+                                        tint = iconTint,
+                                        modifier = Modifier.size(iconSize)
+                                    )
+                                }
+                            }
+                        } else {
+                            Box(
+                                modifier =
+                                    Modifier
+                                        .size(iconBoxSize)
+                                        .clip(RoundedCornerShape(itemRadius))
+                                        .background(iconBg),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = resolveAttachmentIcon(attachment),
+                                    contentDescription = attachment.fileName,
+                                    tint = iconTint,
+                                    modifier = Modifier.size(iconSize)
+                                )
+                            }
+                        }
+
+                        Text(
+                            text = attachment.fileName.ifBlank { if (isImage) "图片" else "文件" },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = textColor,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.widthIn(max = titleMaxWidth)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun appendComplexUserMessage(
+        author: String,
+        content: String,
+        animate: Boolean,
+        attachments: List<AttachmentInfo> = emptyList()
+    ) {
         val bubble = layoutInflater.inflate(R.layout.item_user_message_complex, binding.messagesContainer, false)
         val tv = bubble.findViewById<TextView>(R.id.message_content)
         val authorTv = bubble.findViewById<TextView>(R.id.user_author_name)
+        val attachmentIconsView = bubble.findViewById<ComposeView>(R.id.user_attachment_icons)
         authorTv.text = author
         authorTv.visibility = View.GONE
+        bindUserAttachmentIcons(attachmentIconsView, attachments)
+        tv.visibility = if (content.isBlank()) View.GONE else View.VISIBLE
 
         val density = resources.displayMetrics.density
         fun dp(v: Int): Int = (v * density).toInt()
@@ -3903,7 +4257,7 @@ class MainActivity : AppCompatActivity() {
 
         smoothScrollToBottom()
 
-        if (!animate) {
+        if (!animate || content.isBlank()) {
             tv.text = content
             return
         }

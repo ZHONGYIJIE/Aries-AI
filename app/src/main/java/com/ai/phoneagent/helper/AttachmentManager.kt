@@ -5,13 +5,30 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.ai.phoneagent.data.AttachmentInfo
+import com.itextpdf.kernel.pdf.PdfDocument
+import com.itextpdf.kernel.pdf.PdfReader
+import com.itextpdf.kernel.pdf.canvas.parser.PdfTextExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import org.apache.poi.hslf.usermodel.HSLFSlideShow
+import org.apache.poi.hssf.extractor.ExcelExtractor
+import org.apache.poi.hssf.usermodel.HSSFWorkbook
+import org.apache.poi.hwpf.HWPFDocument
+import org.apache.poi.hwpf.extractor.WordExtractor
+import org.apache.poi.sl.extractor.SlideShowExtractor
+import org.apache.poi.xslf.usermodel.XMLSlideShow
+import org.apache.poi.xssf.extractor.XSSFExcelExtractor
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import org.apache.poi.xwpf.extractor.XWPFWordExtractor
+import org.apache.poi.xwpf.usermodel.XWPFDocument
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -29,6 +46,10 @@ class AttachmentManager(private val context: Context) {
     companion object {
         private const val TAG = "AttachmentManager"
         private const val OCR_INLINE_INSTRUCTION = "Do not read the file, answer the user's question directly based on the attachment content and the user's question."
+        private const val MAX_TEXT_ATTACHMENT_CHARS = 120_000
+        private const val TEXT_ATTACHMENT_TRUNCATED_SUFFIX = "\n\n[附件内容过长，已截断]"
+        private const val MAX_EXTRACTABLE_FILE_BYTES = 20L * 1024L * 1024L
+        private const val FILE_TOO_LARGE_TEMPLATE = "[附件过大，未提取正文，大小=%d字节]"
     }
     
     // 附件列表状态
@@ -38,6 +59,21 @@ class AttachmentManager(private val context: Context) {
     // Toast事件
     private val _toastEvent = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val toastEvent: SharedFlow<String> = _toastEvent
+
+    private val textAttachmentExtensions =
+        setOf(
+            "txt", "md", "markdown", "json", "xml", "csv", "log",
+            "kt", "java", "py", "js", "ts", "jsx", "tsx",
+            "html", "htm", "css", "yml", "yaml", "ini", "properties"
+        )
+
+    private val structuredDocumentExtensions =
+        setOf("pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx")
+
+    private sealed class LimitedReadResult {
+        data class Success(val bytes: ByteArray) : LimitedReadResult()
+        data class TooLarge(val bytesRead: Long) : LimitedReadResult()
+    }
     
     /**
      * 添加多个附件（去重）
@@ -118,14 +154,25 @@ class AttachmentManager(private val context: Context) {
             if (filePath.startsWith("content://")) {
                 val uri = Uri.parse(filePath)
                 val fileName = getFileNameFromUri(uri)
-                val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                val resolvedMimeType =
+                    context.contentResolver.getType(uri)
+                        ?: getMimeTypeFromPath(fileName)
+                        ?: "application/octet-stream"
                 val fileSize = getFileSizeFromUri(uri)
+                val attachmentContent =
+                    readAttachmentContentFromUri(
+                        uri = uri,
+                        fileName = fileName,
+                        mimeType = resolvedMimeType,
+                        fileSize = fileSize
+                    ).orEmpty()
                 
                 val attachmentInfo = AttachmentInfo(
                     filePath = filePath,
                     fileName = fileName,
-                    mimeType = mimeType,
-                    fileSize = fileSize
+                    mimeType = resolvedMimeType,
+                    fileSize = fileSize,
+                    content = attachmentContent
                 )
                 
                 addAttachment(attachmentInfo)
@@ -141,12 +188,20 @@ class AttachmentManager(private val context: Context) {
                 val fileName = file.name
                 val fileSize = file.length()
                 val mimeType = getMimeTypeFromPath(filePath) ?: "application/octet-stream"
+                val attachmentContent =
+                    readAttachmentContentFromFile(
+                        file = file,
+                        fileName = fileName,
+                        mimeType = mimeType,
+                        fileSize = fileSize
+                    ).orEmpty()
                 
                 val attachmentInfo = AttachmentInfo(
                     filePath = file.absolutePath,
                     fileName = fileName,
                     mimeType = mimeType,
-                    fileSize = fileSize
+                    fileSize = fileSize,
+                    content = attachmentContent
                 )
                 
                 addAttachment(attachmentInfo)
@@ -341,8 +396,210 @@ class AttachmentManager(private val context: Context) {
         } catch (e: Exception) {
             // Ignore
         }
-        
-        fileSize
+
+        if (fileSize > 0L) {
+            return@withContext fileSize
+        }
+
+        runCatching {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                descriptor.statSize.takeIf { it > 0L } ?: 0L
+            } ?: 0L
+        }.getOrDefault(0L)
+    }
+
+    private fun detectExtension(fileName: String, mimeType: String): String {
+        val extFromName = fileName.substringAfterLast('.', "").trim().lowercase()
+        if (extFromName.isNotBlank()) return extFromName
+
+        return when (mimeType.substringBefore(";").trim().lowercase()) {
+            "application/pdf" -> "pdf"
+            "application/msword" -> "doc"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> "docx"
+            "application/vnd.ms-powerpoint" -> "ppt"
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> "pptx"
+            "application/vnd.ms-excel" -> "xls"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> "xlsx"
+            else -> ""
+        }
+    }
+
+    private fun shouldExtractAttachmentContent(fileName: String, mimeType: String): Boolean {
+        val normalizedMime = mimeType.substringBefore(";").trim().lowercase()
+        if (normalizedMime.startsWith("text/")) return true
+        if (
+            normalizedMime == "application/json" ||
+            normalizedMime == "application/xml" ||
+            normalizedMime == "application/x-yaml" ||
+            normalizedMime == "application/yaml" ||
+            normalizedMime == "application/csv"
+        ) {
+            return true
+        }
+
+        val extension = detectExtension(fileName, mimeType)
+        return extension in textAttachmentExtensions || extension in structuredDocumentExtensions
+    }
+
+    private fun truncateAttachmentText(raw: String): String {
+        val text = raw.replace("\u0000", "").trim()
+        if (text.length <= MAX_TEXT_ATTACHMENT_CHARS) return text
+        return text.take(MAX_TEXT_ATTACHMENT_CHARS) + TEXT_ATTACHMENT_TRUNCATED_SUFFIX
+    }
+
+    private fun extractAttachmentText(bytes: ByteArray, fileName: String, mimeType: String): String? {
+        val extension = detectExtension(fileName, mimeType)
+        val normalizedMime = mimeType.substringBefore(";").trim().lowercase()
+        val rawText =
+            when {
+                extension in textAttachmentExtensions || normalizedMime.startsWith("text/") ->
+                    bytes.toString(Charsets.UTF_8)
+                extension == "pdf" -> extractPdfText(bytes)
+                extension == "doc" -> extractDocText(bytes)
+                extension == "docx" -> extractDocxText(bytes)
+                extension == "ppt" -> extractPptText(bytes)
+                extension == "pptx" -> extractPptxText(bytes)
+                extension == "xls" -> extractXlsText(bytes)
+                extension == "xlsx" -> extractXlsxText(bytes)
+                else -> null
+            }
+        return rawText?.let(::truncateAttachmentText)?.takeIf { it.isNotBlank() }
+    }
+
+    private fun extractPdfText(bytes: ByteArray): String? =
+        runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                PdfReader(input).use { reader ->
+                    PdfDocument(reader).use { pdf ->
+                        buildString {
+                            for (pageIndex in 1..pdf.numberOfPages) {
+                                val pageText = PdfTextExtractor.getTextFromPage(pdf.getPage(pageIndex)).trim()
+                                if (pageText.isNotBlank()) {
+                                    if (isNotEmpty()) append("\n\n")
+                                    append(pageText)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }.getOrNull()
+
+    private fun extractDocText(bytes: ByteArray): String? =
+        runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                HWPFDocument(input).use { document ->
+                    WordExtractor(document).use { extractor -> extractor.text }
+                }
+            }
+        }.getOrNull()
+
+    private fun extractDocxText(bytes: ByteArray): String? =
+        runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                XWPFDocument(input).use { document ->
+                    XWPFWordExtractor(document).use { extractor -> extractor.text }
+                }
+            }
+        }.getOrNull()
+
+    private fun extractPptText(bytes: ByteArray): String? =
+        runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                HSLFSlideShow(input).use { slideShow ->
+                    SlideShowExtractor(slideShow).use { extractor -> extractor.text }
+                }
+            }
+        }.getOrNull()
+
+    private fun extractPptxText(bytes: ByteArray): String? =
+        runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                XMLSlideShow(input).use { slideShow ->
+                    SlideShowExtractor(slideShow).use { extractor -> extractor.text }
+                }
+            }
+        }.getOrNull()
+
+    private fun extractXlsText(bytes: ByteArray): String? =
+        runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                HSSFWorkbook(input).use { workbook ->
+                    ExcelExtractor(workbook).use { extractor -> extractor.text }
+                }
+            }
+        }.getOrNull()
+
+    private fun extractXlsxText(bytes: ByteArray): String? =
+        runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                XSSFWorkbook(input).use { workbook ->
+                    XSSFExcelExtractor(workbook).use { extractor -> extractor.text }
+                }
+            }
+        }.getOrNull()
+
+    private fun InputStream.readBytesLimited(maxBytes: Long): LimitedReadResult {
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var totalBytes = 0L
+
+        while (true) {
+            val readCount = read(buffer)
+            if (readCount <= 0) break
+
+            totalBytes += readCount
+            if (totalBytes > maxBytes) {
+                return LimitedReadResult.TooLarge(totalBytes)
+            }
+            output.write(buffer, 0, readCount)
+        }
+
+        return LimitedReadResult.Success(output.toByteArray())
+    }
+
+    private suspend fun readAttachmentContentFromUri(
+        uri: Uri,
+        fileName: String,
+        mimeType: String,
+        fileSize: Long
+    ): String? = withContext(Dispatchers.IO) {
+        if (!shouldExtractAttachmentContent(fileName, mimeType)) return@withContext null
+        if (fileSize > MAX_EXTRACTABLE_FILE_BYTES) {
+            return@withContext FILE_TOO_LARGE_TEMPLATE.format(fileSize)
+        }
+        runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                when (val readResult = input.readBytesLimited(MAX_EXTRACTABLE_FILE_BYTES)) {
+                    is LimitedReadResult.Success ->
+                        extractAttachmentText(readResult.bytes, fileName, mimeType)
+                    is LimitedReadResult.TooLarge ->
+                        FILE_TOO_LARGE_TEMPLATE.format(maxOf(fileSize, readResult.bytesRead))
+                }
+            }
+        }.getOrNull()
+    }
+
+    private suspend fun readAttachmentContentFromFile(
+        file: File,
+        fileName: String,
+        mimeType: String,
+        fileSize: Long
+    ): String? = withContext(Dispatchers.IO) {
+        if (!shouldExtractAttachmentContent(fileName, mimeType)) return@withContext null
+        if (fileSize > MAX_EXTRACTABLE_FILE_BYTES) {
+            return@withContext FILE_TOO_LARGE_TEMPLATE.format(fileSize)
+        }
+        runCatching {
+            file.inputStream().use { input ->
+                when (val readResult = input.readBytesLimited(MAX_EXTRACTABLE_FILE_BYTES)) {
+                    is LimitedReadResult.Success ->
+                        extractAttachmentText(readResult.bytes, fileName, mimeType)
+                    is LimitedReadResult.TooLarge ->
+                        FILE_TOO_LARGE_TEMPLATE.format(maxOf(fileSize, readResult.bytesRead))
+                }
+            }
+        }.getOrNull()
     }
     
     /**
@@ -362,8 +619,12 @@ class AttachmentManager(private val context: Context) {
             "json" -> "application/json"
             "xml" -> "application/xml"
             "pdf" -> "application/pdf"
-            "doc", "docx" -> "application/msword"
-            "xls", "xlsx" -> "application/vnd.ms-excel"
+            "doc" -> "application/msword"
+            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            "ppt" -> "application/vnd.ms-powerpoint"
+            "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            "xls" -> "application/vnd.ms-excel"
+            "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             "zip" -> "application/zip"
             "mp3" -> "audio/mpeg"
             "wav" -> "audio/wav"
