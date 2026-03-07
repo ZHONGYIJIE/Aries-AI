@@ -56,11 +56,31 @@ app/src/main/assets/sherpa-models/*
 logs/
 **/logs/
 **/*.log
+.trae/documents/
+docs/思考回答区域修复说明.md
+COMPLETION_REPORT.md
+IMPLEMENTATION_SUMMARY.md
+TODO001_未来优化方案.md
+IMPLEMENTATION_GUIDE.md
+PROGRESS_ANALYSIS.md
+
+docs/VIRTUAL_DISPLAY_FOCUS_ISOLATION_ANALYSIS.md
+docs/VIRTUAL_DISPLAY_FOCUS_SOLUTION_SUMMARY.md
+docs/VIRTUAL_DISPLAY_FOCUS_TESTING.md
+.gitignore
+docs/api-interface-spec.md
+docs/backend-technical-solution.md
+docs/frontend-readme.md
+docs/reference-architecture.md
 
 # Local-only temporary files
+.android/
 AGENTS.md
 analytics.settings
 key/key
+.tmp_material_113/
+.tmp_material_113.zip
+tmp_onboarding_check.png
 
 # Lighthouse reports (local performance profiling artifacts)
 Aries-site/lighthouse-*.report.html
